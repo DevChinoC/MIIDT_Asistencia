@@ -432,12 +432,14 @@ class Modelo:
             self.cursor.execute(query, params)
             historial = self.cursor.fetchall()
             print(f"Historial obtenido{type(historial)}: {historial}")
+            
             # Convertir a lista de diccionarios
             historial_dicts = []
             horas_entrada = []
             horas_salida = []
             horas_semanales = {}
             horas_mensuales = {}
+            total_horas = 0.0  # 🔹 acumulador de horas totales del periodo
             
             for reg in historial:
                 try:
@@ -478,7 +480,14 @@ class Modelo:
                     except Exception as e:
                         print(f"Error al formatear fechas/horas: {e}")
                     
-                    # Agregar al historial
+                    # 🔹 Acumular total de horas del periodo (como número)
+                    try:
+                        horas_num = float(horas_presentes)
+                    except (ValueError, TypeError):
+                        horas_num = 0.0
+                    total_horas += horas_num
+                    
+                    # Agregar al historial (para la vista)
                     historial_dicts.append({
                         'fecha': fecha,
                         'hora_entrada': hora_entrada,
@@ -486,7 +495,7 @@ class Modelo:
                         'horas_presentes': horas_presentes
                     })
                     
-                    # Recolectar horas para cálculos
+                    # Recolectar horas para cálculos de frecuencia
                     if hora_entrada != '--:--':
                         horas_entrada.append(hora_entrada)
                     if hora_salida != '--:--':
@@ -500,21 +509,17 @@ class Modelo:
                         try:
                             fecha_dt = datetime.strptime(str(reg[0]), '%Y-%m-%d')
                             semana = f"{fecha_dt.year}-W{fecha_dt.isocalendar()[1]}"
-                            mes = f"{fecha_dt.year}-{fecha_dt.month:02d}"
+                            mes_key = f"{fecha_dt.year}-{fecha_dt.month:02d}"
                             print(f"Fecha dt: {fecha_dt}")
                             print(f"Semana: {semana}")
-                            print(f"Mes: {mes}")
-                            # Calcular horas presentes si están disponibles
-                            if reg[3] is not None and reg[3] != '--:--':
-                                try:
-                                    horas = float(reg[3])
-                                    print(f"Horas: {horas}")
-                                    horas_semanales[semana] = horas_semanales.get(semana, 0) + horas
-                                    horas_mensuales[mes] = horas_mensuales.get(mes, 0) + horas
-                                    print(f"Horas semanales: {horas_semanales}")
-                                    print(f"Horas mensuales: {horas_mensuales}")
-                                except (ValueError, TypeError) as ve:
-                                    print(f"Error al convertir horas: {ve}")
+                            print(f"Mes: {mes_key}")
+                            
+                            # Usar horas_num para acumular por semana y mes
+                            horas_semanales[semana] = horas_semanales.get(semana, 0.0) + horas_num
+                            horas_mensuales[mes_key] = horas_mensuales.get(mes_key, 0.0) + horas_num
+                            
+                            print(f"Horas semanales: {horas_semanales}")
+                            print(f"Horas mensuales: {horas_mensuales}")
                                     
                         except Exception as e:
                             print(f"Error al procesar fecha {fecha}: {e}")
@@ -541,7 +546,10 @@ class Modelo:
                 'promedio_mensual': f"{promedio_mensual:.2f}",
                 'hora_entrada_frecuente': hora_mas_frecuente(horas_entrada),
                 'hora_salida_frecuente': hora_mas_frecuente(horas_salida),
-                'historial': historial_dicts
+                'historial': historial_dicts,
+                # 🔹 NUEVOS CAMPOS PARA QUE LA VISTA LOS USE
+                'total_horas_periodo': f"{total_horas:.2f}",
+                'total_horas_mes': f"{total_horas:.2f}"
             }
             
         except Exception as e:
@@ -553,8 +561,11 @@ class Modelo:
                 'promedio_mensual': '0.00',
                 'hora_entrada_frecuente': '--:--',
                 'hora_salida_frecuente': '--:--',
-                'historial': []
+                'historial': [],
+                'total_horas_periodo': '0.00',
+                'total_horas_mes': '0.00'
             }
+
 
 
     def obtener_asistencias_hoy_completo(self):

@@ -3198,7 +3198,7 @@ class VentanaPrincipal:
             # 3.1 Helpers internos: PDF y Excel
             # ==========================
             def _exportar_pdf_core():
-                nombre_sugerido = f"reporte_{estudiante.get('matricula','nombre')}_{seleccion}.pdf".replace(" ", "_")
+                nombre_sugerido = f"reporte_{estudiante.get('matricula','')}_{seleccion}.pdf".replace(" ", "_")
                 ruta_pdf = filedialog.asksaveasfilename(
                     defaultextension=".pdf",
                     filetypes=[("PDF files", "*.pdf")],
@@ -3859,7 +3859,7 @@ class VentanaPrincipal:
 
             # 1) Estado de vista
             self.vista_actual = 'general'
-            self.btn_exportar.config(state=tk.NORMAL, text="Exportar Reporte")
+            #self.btn_exportar.config(state=tk.NORMAL, text="Exportar Reporte")
 
             # 2) Preparar contenedor visual
             if hasattr(self, 'frame_mensaje_central') and self.frame_mensaje_central.winfo_ismapped():
