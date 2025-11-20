@@ -1,4 +1,6 @@
 import os
+import re
+import unicodedata
 from tkinter import simpledialog
 from dotenv import load_dotenv
 import bcrypt
@@ -7,6 +9,8 @@ from tkinter import ttk, messagebox, filedialog
 from PIL import Image, ImageTk
 import pandas as pd
 from fpdf import FPDF
+from pdf2image import convert_from_path
+from PIL import Image
 from fpdf.enums import AccessPermission  
 import traceback, openpyxl, threading, locale
 from openpyxl.utils import get_column_letter
@@ -3052,6 +3056,7 @@ class VentanaPrincipal:
         # ====================================================================
 
         pdf.output(dest_path)
+        
         return dest_path
 
 
