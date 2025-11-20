@@ -2833,185 +2833,226 @@ class VentanaPrincipal:
 
     
     def _generar_pdf_alumno(self, meta: dict, carpeta_salida: str = None, dest_path: str = None) -> str:
-            """
-            Genera un PDF individual para el alumno usando el diseño de fondo.
-            - Si dest_path está dado, guarda ahí.
-            - En caso contrario, construye el nombre dentro de carpeta_salida.
-            Devuelve la ruta creada.
-            """
-            def slugify(s):
-                s = "" if s is None else str(s)
-                s = "".join(c for c in unicodedata.normalize("NFKD", s) if not unicodedata.combining(c))
-                # permitir letras, números, guiones, puntos y espacios
-                s = re.sub(r"[^\w\-. ]+", "", s, flags=re.UNICODE)
-                return s.strip().replace(" ", "_")
+        """
+        Genera un PDF individual para el alumno usando el diseño de fondo.
+        - Si dest_path está dado, guarda ahí.
+        - En caso contrario, construye el nombre dentro de carpeta_salida.
+        Devuelve la ruta creada.
+        """
+        def slugify(s):
+            s = "" if s is None else str(s)
+            s = "".join(c for c in unicodedata.normalize("NFKD", s) if not unicodedata.combining(c))
+            # permitir letras, números, guiones, puntos y espacios
+            s = re.sub(r"[^\w\-. ]+", "", s, flags=re.UNICODE)
+            return s.strip().replace(" ", "_")
 
-            # construir nombre si no se pasó dest_path
-            if dest_path is None:
-                if not carpeta_salida:
-                    raise ValueError("Debe especificarse dest_path o carpeta_salida")
-                nombre_archivo = f"reporte_{slugify(meta.get('matricula',''))}_{slugify(meta.get('nombre',''))}.pdf"
-                dest_path = os.path.join(carpeta_salida, nombre_archivo)
+        # construir nombre si no se pasó dest_path
+        if dest_path is None:
+            if not carpeta_salida:
+                raise ValueError("Debe especificarse dest_path o carpeta_salida")
+            nombre_archivo = f"reporte_{slugify(meta.get('matricula',''))}_{slugify(meta.get('nombre',''))}.pdf"
+            dest_path = os.path.join(carpeta_salida, nombre_archivo)
 
-            # ------- datos de filtros / periodo -------
-            filtros = meta.get("filtros", {}) if isinstance(meta, dict) else {}
-            mes = filtros.get("mes")
-            anio = filtros.get("anio")
-            fi = filtros.get("fecha_inicio")
-            ff = filtros.get("fecha_fin")
+        # ------- datos de filtros / periodo -------
+        filtros = meta.get("filtros", {}) if isinstance(meta, dict) else {}
+        mes = filtros.get("mes")
+        anio = filtros.get("anio")
+        fi = filtros.get("fecha_inicio")
+        ff = filtros.get("fecha_fin")
 
-            try:
-                mes_nombre = self.combo_mes.get()
-            except Exception:
-                mes_nombre = str(mes) if mes else ""
+        try:
+            mes_nombre = self.combo_mes.get()
+        except Exception:
+            mes_nombre = str(mes) if mes else ""
 
-            encabezado_rango = ""
-            if mes and anio:
-                encabezado_rango = f"Mes {mes_nombre} {anio}"
-            elif fi and ff:
-                encabezado_rango = f"Del {fi} al {ff}"
+        encabezado_rango = ""
+        if mes and anio:
+            encabezado_rango = f"Mes {mes_nombre} {anio}"
+        elif fi and ff:
+            encabezado_rango = f"Del {fi} al {ff}"
 
-            # ------- estadísticas -------
-            estad = meta.get("estad", {}) or {}
-            tot_hrs = str(estad.get("total_horas_mes", estad.get("total_horas_periodo", "0.00")))
-            prom_sem = str(estad.get("promedio_semanal", "0.00"))
-            prom_mes = str(estad.get("promedio_mensual", "0.00"))
-            hora_ent = estad.get("hora_entrada_frecuente", "--:--")
-            hora_sal = estad.get("hora_salida_frecuente", "--:--")
-            historial = estad.get("historial", []) or []
+        # ------- estadísticas -------
+        estad = meta.get("estad", {}) or {}
+        tot_hrs = str(estad.get("total_horas_mes", estad.get("total_horas_periodo", "0.00")))
+        prom_sem = str(estad.get("promedio_semanal", "0.00"))
+        prom_mes = str(estad.get("promedio_mensual", "0.00"))
+        hora_ent = estad.get("hora_entrada_frecuente", "--:--")
+        hora_sal = estad.get("hora_salida_frecuente", "--:--")
+        historial = estad.get("historial", []) or []
 
-            # ------- datos del alumno -------
-            nombre_alumno = (meta.get("nombre", "") or "").strip()
-            matricula = str(meta.get("matricula", "") or "")
-            generacion = meta.get("generacion", "") or ""
-            asesor = meta.get("asesor", "") or ""
-            area = meta.get("area", meta.get("area_conocimiento", "")) or ""
-            carrera = meta.get("carrera", "") or ""
+        # ------- datos del alumno -------
+        nombre_alumno = (meta.get("nombre", "") or "").strip()
+        matricula = str(meta.get("matricula", "") or "")
+        generacion = meta.get("generacion", "") or ""
+        asesor = meta.get("asesor", "") or ""
+        area = meta.get("area", meta.get("area_conocimiento", "")) or ""
+        carrera = meta.get("carrera", "") or ""
 
-            # ------- PDF -------
-            pdf = FPDF()  # P, mm, A4 por defecto
+        # ------- PDF -------
+        pdf = FPDF()  # P, mm, A4 por defecto
+        pdf.add_page()
+
+        # Fondo (diseño.png). Se intentan varias rutas posibles.
+        posibles_rutas = [
+            os.path.join("public", "static", "images", "diseño.png"),
+            os.path.join("public", "static", "images", "diseno.png"),
+            "diseño.png",
+            "diseno.png",
+        ]
+        try:
+            for ruta_img in posibles_rutas:
+                if os.path.exists(ruta_img):
+                    pdf.image(ruta_img, x=0, y=0, w=pdf.w)
+                    break
+        except Exception:
+            # Si falla la imagen, continuamos sin fondo
+            pass
+
+        # Título
+        pdf.set_font("Arial", "B", 20)
+        pdf.set_xy(0, 40)  # algo abajo del encabezado del diseño
+        pdf.cell(0, 10, "REPORTE DE ASISTENCIAS", ln=True, align="C")
+
+        # Línea de mes / periodo
+        pdf.set_font("Arial", "", 14)
+        if encabezado_rango:
+            pdf.cell(0, 8, encabezado_rango, ln=True, align="C")
+        pdf.ln(10)
+
+        # Datos del alumno (dos columnas)
+        pdf.set_font("Arial", "", 12)
+        line_h = 7
+        left_x = 20
+        right_x = 115
+
+        y_ini = pdf.get_y()
+        pdf.set_xy(left_x, y_ini)
+        pdf.cell(0, line_h, f"Alumno: {nombre_alumno}", ln=False)
+        pdf.set_xy(right_x, y_ini)
+        pdf.cell(0, line_h, f"Matrícula: {matricula}", ln=True)
+
+        y = pdf.get_y()
+        pdf.set_xy(left_x, y)
+        pdf.cell(0, line_h, f"Generación: {generacion}", ln=False)
+        pdf.set_xy(right_x, y)
+        pdf.cell(0, line_h, f"Asesor: {asesor}", ln=True)
+
+        y = pdf.get_y()
+        pdf.set_xy(left_x, y)
+        pdf.cell(0, line_h, f"Área: {area}", ln=False)
+        pdf.set_xy(right_x, y)
+        pdf.cell(0, line_h, f"Carrera: {carrera}", ln=True)
+
+        pdf.ln(8)
+
+        # Resumen
+        pdf.set_font("Arial", "B", 12)
+        pdf.cell(0, line_h, "Resumen:", ln=True)
+        pdf.set_font("Arial", "", 12)
+        pdf.cell(0, line_h, f"Total de horas en el periodo: {tot_hrs}", ln=True)
+        pdf.cell(0, line_h, f"Promedio semanal: {prom_sem}", ln=True)
+        pdf.cell(0, line_h, f"Promedio mensual: {prom_mes}", ln=True)
+        pdf.cell(0, line_h, f"Hora más frecuente de entrada: {hora_ent}", ln=True)
+        pdf.cell(0, line_h, f"Hora más frecuente de salida: {hora_sal}", ln=True)
+
+        pdf.ln(10)
+
+        # Historial de asistencias
+        pdf.set_font("Arial", "B", 12)
+        pdf.cell(0, line_h, "Historial de Asistencias", ln=True)
+        pdf.ln(2)
+
+        # ---------- TABLA DE HISTORIAL ----------
+        pdf.set_font("Arial", "B", 10)
+        col_w = [40, 40, 40, 40]
+        headers = ["Fecha", "Hora Entrada", "Hora Salida", "Horas Presentes"]
+
+        # límites seguros para no pisar el membrete del pie
+        ALTURA_FILA = 7
+        Y_MAX_TABLA = 235   # máximo Y para iniciar una fila de tabla
+        Y_MAX_CONTENIDO = 240  # límite para contenido (antes del pie)
+
+        # encabezados de la tabla
+        for w, h in zip(col_w, headers):
+            pdf.cell(w, 8, h, border=1, align="C")
+        pdf.ln(8)
+
+        pdf.set_font("Arial", "", 9)
+        for reg in historial:
+            # Si la siguiente fila no cabe antes del pie, nueva página con fondo y encabezados
+            if pdf.get_y() + ALTURA_FILA > Y_MAX_TABLA:
+                pdf.add_page()
+                try:
+                    for ruta_img in posibles_rutas:
+                        if os.path.exists(ruta_img):
+                            pdf.image(ruta_img, x=0, y=0, w=pdf.w)
+                            break
+                except Exception:
+                    pass
+
+                # 🔹 MUY IMPORTANTE: bajar debajo del membrete superior
+                pdf.set_y(50)  # ajusta 75/85 según tu diseño
+
+                # Reimprimir encabezados de tabla en la nueva página
+                pdf.set_font("Arial", "B", 10)
+                for w, h in zip(col_w, headers):
+                    pdf.cell(w, 8, h, border=1, align="C")
+                pdf.ln(8)
+                pdf.set_font("Arial", "", 9)
+
+            pdf.cell(col_w[0], ALTURA_FILA, str(reg.get("fecha", "")), border=1, align="C")
+            pdf.cell(col_w[1], ALTURA_FILA, str(reg.get("hora_entrada", "")), border=1, align="C")
+            pdf.cell(col_w[2], ALTURA_FILA, str(reg.get("hora_salida", "")), border=1, align="C")
+            pdf.cell(col_w[3], ALTURA_FILA, str(reg.get("horas_presentes", "")), border=1, align="C")
+            pdf.ln(ALTURA_FILA)
+
+
+        # ---------- FIRMA DEL ASESOR AL FINAL ----------
+        FIRMA_ALTURA = 22  # espacio necesario para línea + texto
+
+        # si no cabe la firma sin pisar el pie, nueva página
+        if pdf.get_y() + FIRMA_ALTURA > Y_MAX_CONTENIDO:
             pdf.add_page()
-
-            # Fondo (diseño.png). Se intentan varias rutas posibles.
             try:
-                posibles_rutas = [
-                    os.path.join("public", "static", "images", "diseño.png"),
-                    os.path.join("public", "static", "images", "diseno.png"),
-                    "diseño.png",
-                    "diseno.png",
-                ]
                 for ruta_img in posibles_rutas:
                     if os.path.exists(ruta_img):
                         pdf.image(ruta_img, x=0, y=0, w=pdf.w)
                         break
             except Exception:
-                # Si falla la imagen, continuamos sin fondo
                 pass
 
-            # Título
-            pdf.set_font("Arial", "B", 20)
-            pdf.set_xy(0, 40)  # algo abajo del encabezado del diseño
-            pdf.cell(0, 10, "REPORTE INDIVIDUAL DE ASISTENCIAS", ln=True, align="C")
+        # colocamos la firma cerca de la parte baja pero arriba del membrete
+        y_firma = max(pdf.get_y() + 10, Y_MAX_CONTENIDO - FIRMA_ALTURA)
+        pdf.set_y(y_firma)
 
-            # Línea de mes / periodo
-            pdf.set_font("Arial", "", 14)
-            if encabezado_rango:
-                pdf.cell(0, 8, encabezado_rango, ln=True, align="C")
-            pdf.ln(10)
+        pdf.set_font("Arial", "", 11)
+        pdf.ln(4)
+        # línea de firma centrada
+        pdf.cell(0, 6, "______________________________", ln=True, align="C")
 
-            # Datos del alumno (dos columnas)
-            pdf.set_font("Arial", "", 12)
-            line_h = 7
-            left_x = 20
-            right_x = 115
+        texto_asesor = f"Asesor: {asesor}" if asesor else "Asesor"
+        pdf.ln(2)
+        pdf.cell(0, 6, texto_asesor, ln=True, align="C")
 
-            y_ini = pdf.get_y()
-            pdf.set_xy(left_x, y_ini)
-            pdf.cell(0, line_h, f"Alumno: {nombre_alumno}", ln=False)
-            pdf.set_xy(right_x, y_ini)
-            pdf.cell(0, line_h, f"Matrícula: {matricula}", ln=True)
-
-            y = pdf.get_y()
-            pdf.set_xy(left_x, y)
-            pdf.cell(0, line_h, f"Generación: {generacion}", ln=False)
-            pdf.set_xy(right_x, y)
-            pdf.cell(0, line_h, f"Asesor: {asesor}", ln=True)
-
-            y = pdf.get_y()
-            pdf.set_xy(left_x, y)
-            pdf.cell(0, line_h, f"Área: {area}", ln=False)
-            pdf.set_xy(right_x, y)
-            pdf.cell(0, line_h, f"Carrera: {carrera}", ln=True)
-
-            pdf.ln(8)
-
-            # Resumen
-            pdf.set_font("Arial", "B", 12)
-            pdf.cell(0, line_h, "Resumen:", ln=True)
-            pdf.set_font("Arial", "", 12)
-            pdf.cell(0, line_h, f"Total de horas en el periodo: {tot_hrs}", ln=True)
-            pdf.cell(0, line_h, f"Promedio semanal: {prom_sem}", ln=True)
-            pdf.cell(0, line_h, f"Promedio mensual: {prom_mes}", ln=True)
-            pdf.cell(0, line_h, f"Hora más frecuente de entrada: {hora_ent}", ln=True)
-            pdf.cell(0, line_h, f"Hora más frecuente de salida: {hora_sal}", ln=True)
-
-            pdf.ln(10)
-
-            # Historial de asistencias
-            pdf.set_font("Arial", "B", 12)
-            pdf.cell(0, line_h, "Historial de Asistencias", ln=True)
-            pdf.ln(2)
-
-            pdf.set_font("Arial", "B", 10)
-            col_w = [40, 40, 40, 40]
-            headers = ["Fecha", "Hora Entrada", "Hora Salida", "Horas Presentes"]
-
-            for w, h in zip(col_w, headers):
-                pdf.cell(w, 8, h, border=1, align="C")
-            pdf.ln(8)
-
-            pdf.set_font("Arial", "", 9)
-            for reg in historial:
-                # Si se queda sin espacio, nueva página con fondo y cabeceras de tabla
-                if pdf.get_y() > 260:
-                    pdf.add_page()
-                    try:
-                        for ruta_img in posibles_rutas:
-                            if os.path.exists(ruta_img):
-                                pdf.image(ruta_img, x=0, y=0, w=pdf.w)
-                                break
-                    except Exception:
-                        pass
-                    pdf.set_font("Arial", "B", 10)
-                    for w, h in zip(col_w, headers):
-                        pdf.cell(w, 8, h, border=1, align="C")
-                    pdf.ln(8)
-                    pdf.set_font("Arial", "", 9)
-
-                pdf.cell(col_w[0], 7, str(reg.get("fecha", "")), border=1, align="C")
-                pdf.cell(col_w[1], 7, str(reg.get("hora_entrada", "")), border=1, align="C")
-                pdf.cell(col_w[2], 7, str(reg.get("hora_salida", "")), border=1, align="C")
-                pdf.cell(col_w[3], 7, str(reg.get("horas_presentes", "")), border=1, align="C")
-                pdf.ln(7)
-            # ============== PROTECCIÓN (si la librería lo soporta) ==============
-            if hasattr(pdf, "set_encryption"):
-                try:
-                    pdf.set_encryption(
-                        owner_password="12345",    # contraseña para modificar/quitar protección
-                        user_password=None,        # None o "" => se abre sin pedir contraseña
-                        permissions=(
+        # ============== PROTECCIÓN (si la librería lo soporta) ==============
+        if hasattr(pdf, "set_encryption"):
+            try:
+                pdf.set_encryption(
+                    owner_password="12345",    # contraseña para modificar/quitar protección
+                    user_password=None,        # None o "" => se abre sin pedir contraseña
+                    permissions=(
                         AccessPermission.PRINT_LOW_RES |
                         AccessPermission.PRINT_HIGH_RES
-                        )  # ✅ solo se permite imprimir, NO copiar/editar
-                    )
-                except Exception as e:
-                    print(f"ADVERTENCIA: No se pudo aplicar protección al PDF: {e}")
-            else:
-                print("ADVERTENCIA: Esta versión de FPDF no tiene set_protection (no es fpdf2).")
-            # ====================================================================
+                    )  # ✅ solo se permite imprimir, NO copiar/editar
+                )
+            except Exception as e:
+                print(f"ADVERTENCIA: No se pudo aplicar protección al PDF: {e}")
+        else:
+            print("ADVERTENCIA: Esta versión de FPDF no tiene set_encryption (no es fpdf2).")
+        # ====================================================================
 
-            pdf.output(dest_path)
-            return dest_path
+        pdf.output(dest_path)
+        return dest_path
 
 
     def _enviar_reporte_generacion_por_correo(self, top):
