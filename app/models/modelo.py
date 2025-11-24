@@ -259,6 +259,41 @@ class Modelo:
             print(f"Error al registrar asistencia: {e}")
             self.db.rollback()
             return False
+    
+    from datetime import datetime, timedelta   # arriba del archivo, si aún no lo tienes
+
+    def obtener_ultima_asistencia_hoy(self, estudiante_id):
+        """
+        Devuelve el último registro de asistencia de HOY para un estudiante.
+        - Si no hay registros hoy -> None
+        - Si hay, regresa dict con id, asistencia, hora_entrada, hora_salida
+        """
+        try:
+            hoy = datetime.now().strftime("%Y-%m-%d")
+
+            self.cursor.execute("""
+                SELECT id, asistencia, hora_entrada, hora_salida
+                FROM registro_asistencias
+                WHERE alumno_id = %s
+                  AND DATE(asistencia) = %s
+                ORDER BY asistencia DESC, id DESC
+                LIMIT 1
+            """, (estudiante_id, hoy))
+
+            row = self.cursor.fetchone()
+            if not row:
+                return None
+
+            return {
+                "id": row[0],
+                "asistencia": row[1],
+                "hora_entrada": row[2],
+                "hora_salida": row[3],
+            }
+        except Exception as e:
+            print(f"Error al obtener última asistencia de hoy: {e}")
+            return None
+
 
     def obtener_asistencias_hoy(self):
         try:

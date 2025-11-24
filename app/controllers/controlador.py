@@ -161,6 +161,7 @@ class Controlador:
     def obtener_asistencias_hoy_completo(self):
         return self.modelo.obtener_asistencias_hoy_completo()
 
+    
     # ===== MÉTODOS PARA GESTIÓN DE CATÁLOGO =====
     
     # Generaciones

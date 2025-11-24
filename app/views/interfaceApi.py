@@ -187,85 +187,124 @@ class InterfaceApi:
             traceback.print_exc()
             return False
     
-
     def verify_fingerprint(self, estudiantes):
         """
-        Muestra la interfaz de verificación de huellas y busca coincidencias con los estudiantes proporcionados
-        :param estudiantes: Lista de diccionarios con información de estudiantes que tienen huella digital
-        :return: Diccionario con los datos del estudiante si se encuentra coincidencia, None en caso contrario
+        Verifica una huella contra estudiantes (acepta dicts o tuplas)
+        Devuelve el estudiante encontrado como dict o None.
         """
         self.attempts = 0
         self.max_attempts = 3
         matching_student = None
-        
-        # Inicializar el sistema de coincidencia si no está inicializado
+
+        # Inicializar Matching si no está listo
         if not hasattr(self, 'mc_context'):
             self._init_matching()
+
+        def normalizar(est):
+            """Convierte tuplas a diccionarios y deja dicts intactos."""
+            if isinstance(est, dict):
+                return est
+
+            if isinstance(est, (tuple, list)) and len(est) >= 2:
+                # La huella SIEMPRE se toma del último elemento de la tupla
+                return {
+                    "id": est[0],
+                    "matricula": est[1] if len(est) > 1 else "",
+                    "nombre": est[2] if len(est) > 2 else "",
+                    "apellido_p": est[3] if len(est) > 3 else "",
+                    "apellido_m": est[4] if len(est) > 4 else "",
+                    "huella_digital": est[-1],   # ← IMPORTANTE
+                }
+
+            return None
 
         def on_verify(feature_data: bytes) -> bool:
             nonlocal matching_student
             try:
-                # Buscar coincidencia con alguna de las huellas de los estudiantes
-                for estudiante in estudiantes:
-                    if not estudiante.get('huella_digital'):
+                print(f"[DEBUG] Huella capturada, tamaño={len(feature_data)} bytes")
+
+                for est in estudiantes:
+                    est_dict = normalizar(est)
+                    if not est_dict:
                         continue
-                        
-                    if self._compare_features_with_template(feature_data, estudiante['huella_digital']):
-                        matching_student = estudiante
-                        # Éxito - Mostrar UI personalizada
+
+                    huella = est_dict.get("huella_digital")
+                    if not huella:
+                        continue
+
+                    print(f"[DEBUG] Comparando con alumno ID={est_dict['id']}")
+
+                    if self._compare_features_with_template(feature_data, huella):
+                        matching_student = est_dict
+                        print(f"[DEBUG] Coincidencia encontrada con ID={est_dict['id']}")
+
                         if hasattr(self, 'on_success'):
                             self.on_success()
-                        return True  # Coincidencia encontrada
-                
-                # Si llegamos aquí, no hubo coincidencias
+
+                        return True
+
+                # No hubo coincidencia
                 self.attempts += 1
+
                 if self.attempts >= self.max_attempts:
-                    # Máximo de intentos alcanzado
+                    print("[DEBUG] No hubo coincidencia tras 3 intentos.")
                     if hasattr(self, 'on_max_attempts'):
                         self.on_max_attempts()
-                    return False  # Esto cerrará la ventana de verificación
+                    return False
+
                 else:
-                    # Mostrar mensaje de reintento
+                    remaining = self.max_attempts - self.attempts
+                    print(f"[DEBUG] Reintentando... intentos restantes: {remaining}")
+
                     if hasattr(self, 'on_retry'):
-                        remaining = self.max_attempts - self.attempts
                         self.on_retry(remaining)
-                    return False  # No hubo coincidencias
-                    
+
+                    return False
+
             except Exception as e:
                 print(f"Error en verificación de huella: {e}")
                 import traceback
                 traceback.print_exc()
                 return False
-        # Configurar el callback de verificación
+
+        # Asignar callback
         self.on_verify_callback = on_verify
 
         try:
-            # Llamar a la interfaz de verificación
             result = self.dpfpui.DPVerifyUI(
-                None,  # hWnd padre
-                self._verification_callback,  # Callback
-                "Verificación de Huella",  # Título
-                "Coloque su dedo en el lector",  # Instrucción
-                None,  # hBitmap (opcional)
-                None   # User data (no se usa aquí, usamos el callback de instancia)
+                None,
+                self._verification_callback,
+                "Verificación de Huella",
+                "Coloque su dedo en el lector",
+                None,
+                None
             )
-            if result == 0x800704C7:  # El usuario canceló la operación
-                print("Operación cancelada por el usuario")
-                return False
-            return matching_student if result == 0 else False
+
+            print(f"[DEBUG] Resultado DPVerifyUI: {hex(result)}")
+
+            # Resultado exitoso = 0
+            if result == 0:
+                return matching_student
+
+            # Cualquier otro código = no match o cancelado
+            print("[DEBUG] Verificación finalizada sin coincidencia.")
+            return None
+
         except OSError as e:
-            if e.winerror == -2147023673:  # Usuario canceló la operación
-                print("Operación cancelada por el usuario")
-                return False
+            if e.winerror == -2147023673:
+                print("[DEBUG] Usuario cerró la ventana del lector.")
+                return None
+
             print(f"Error al iniciar la verificación: {e}")
             import traceback
             traceback.print_exc()
-            return False
+            return None
+
         except Exception as e:
             print(f"Error inesperado durante la verificación: {e}")
             import traceback
             traceback.print_exc()
-            return False
+            return None
 
 
     def _handle_enrollment(self, 
