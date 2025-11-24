@@ -1343,51 +1343,105 @@ class VentanaPrincipal:
 
         # Método para manejar el resultado de la verificación
         def manejar_verificacion_huella():
-            # Obtener todos los estudiantes con sus huellas
-            estudiantes_tuples = self.controlador.obtener_estudiantes_para_asistencia(mostrar_en_vista=False)
-            
-            if not estudiantes_tuples:
-                messagebox.showwarning("Advertencia", "No hay estudiantes registrados en el sistema.")
-                return
-            
-            # Convertir la lista de tuplas a lista de diccionarios y filtrar solo los que tienen huella
-            estudiantes_con_huella = []
-            for est in estudiantes_tuples:
-                if len(est) > 4 and est[4]:  # Verificar que existe huella_digital y no es None
-                    estudiante = {
-                        'id': est[0],
-                        'nombre': est[1],
-                        'apellido_p': est[2] if len(est) > 2 else '',
-                        'apellido_m': est[3] if len(est) > 3 else '',
-                        'huella_digital': est[4]
-                    }
-                    estudiantes_con_huella.append(estudiante)
-            
-            if not estudiantes_con_huella:
-                messagebox.showwarning("Advertencia", "No hay estudiantes con huellas registradas en el sistema.")
-                return
-            
-            # Buscar coincidencia con alguna huella registrada
-            estudiante_encontrado = self.interface_api.verify_fingerprint(estudiantes_con_huella)
-            
-            if estudiante_encontrado:
-                # Verificar si ya tiene una asistencia registrada hoy
-                if self.controlador.verificar_asistencia_existente(estudiante_encontrado['id']):
-                    messagebox.showinfo("Información", 
-                        f"{estudiante_encontrado['nombre']} {estudiante_encontrado['apellido_p']} ya tiene una asistencia registrada hoy.")
-                    self._actualizar_asistencias_hoy()
+            try:
+                # 1) Obtener estudiantes con huella desde el controlador
+                estudiantes = self.controlador.obtener_estudiantes_para_asistencia()
+                if not estudiantes:
+                    messagebox.showwarning("Advertencia", "No hay estudiantes con huella registrada.")
                     return
-                    
-                # Registrar la asistencia
-                if self.controlador.registrar_asistencia(estudiante_encontrado['id']):
-                    messagebox.showinfo("Éxito", 
-                        f"Bienvenido/a {estudiante_encontrado['nombre']} {estudiante_encontrado['apellido_p']}")
-                    self._actualizar_asistencias_hoy()
+
+                # 2) Verificar huella usando la interfaz biométrica
+                matching_student = self.interface_api.verify_fingerprint(estudiantes)
+
+                if not matching_student:
+                    self.mostrar_notificacion_rapida(
+                        "Huella no reconocida",
+                        color_fondo="#dc2626"
+                    )
+                    return
+
+                estudiante = matching_student
+                estudiante_id = estudiante["id"]
+
+                # 3) Ver qué tiene hoy el estudiante
+                ultima = self.controlador.modelo.obtener_ultima_asistencia_hoy(estudiante_id)
+
+                from datetime import datetime, timedelta, time
+                ahora = datetime.now()
+
+                #
+                # === CASO A: NO TIENE ENTRADA HOY ===
+                #
+                if not ultima or not ultima.get("hora_entrada"):
+                    if self.controlador.verificar_asistencia_existente(estudiante_id):
+                        self.mostrar_notificacion_rapida(
+                            "Ya registraste tu asistencia hoy.",
+                            color_fondo="#f97316"
+                        )
+                        return
+
+                    if self.controlador.registrar_asistencia(estudiante_id):
+                        self._actualizar_asistencias_hoy()
+                        self.mostrar_notificacion_rapida("Ingreso exitoso", "#16a34a")
+                    else:
+                        self.mostrar_notificacion_rapida("Error al registrar ingreso", "#dc2626")
+                    return
+
+                #
+                # === CASO B: YA TIENE ENTRADA Y SALIDA ===
+                #
+                if ultima.get("hora_salida"):
+                    self.mostrar_notificacion_rapida(
+                        "Ya registraste entrada y salida hoy.",
+                        color_fondo="#f97316"
+                    )
+                    return
+
+                #
+                # === CASO C: TIENE ENTRADA PERO NO SALIDA ===
+                #
+                fecha_reg = ultima["asistencia"]
+                hora_ent = ultima["hora_entrada"]
+
+                # Normalizar la fecha
+                if hasattr(fecha_reg, "date"):
+                    fecha_reg = fecha_reg.date()
+
+                # Normalizar la hora (puede ser time, timedelta o str)
+                if isinstance(hora_ent, time):
+                    hora_ent_time = hora_ent
+                elif isinstance(hora_ent, timedelta):
+                    hora_ent_time = (datetime.min + hora_ent).time()
                 else:
-                    messagebox.showerror("Error", "No se pudo registrar la asistencia")
-            else:
-                messagebox.showerror("Error", 
-                    "Huella no reconocida. Por favor, intente nuevamente o contacte al administrador.")
+                    # Intento de convertir cadena HH:MM(:SS)
+                    try:
+                        hora_ent_time = datetime.strptime(str(hora_ent), "%H:%M:%S").time()
+                    except:
+                        hora_ent_time = datetime.strptime(str(hora_ent), "%H:%M").time()
+
+                dt_entrada = datetime.combine(fecha_reg, hora_ent_time)
+
+                # Reglas del minuto mínimo
+                if ahora - dt_entrada < timedelta(minutes=1):
+                    self.mostrar_notificacion_rapida(
+                        "Debe pasar 1 minuto desde la entrada.",
+                        color_fondo="#dc2626"
+                    )
+                    return
+
+                # Registrar salida
+                if self.controlador.registrar_salida(ultima["id"]):
+                    self._actualizar_asistencias_hoy()
+                    self.mostrar_notificacion_rapida("Salida exitosa", "#0ea5e9")
+                else:
+                    self.mostrar_notificacion_rapida("Error al registrar salida", "#dc2626")
+
+            except Exception as e:
+                print(f"Error en manejo de verificación de huella: {e}")
+                import traceback
+                traceback.print_exc()
+                messagebox.showerror("Error", "Ocurrió un error al procesar la huella.")
+
 
         # Botón escanear huella
         btn_escanear = tk.Button(panel_lector, text="Escanear Huella", font=("Arial", 12, "bold"),
@@ -1428,19 +1482,19 @@ class VentanaPrincipal:
         # Crear el Treeview con las columnas necesarias
         self.tree_asistencias = ttk.Treeview(
             frame_tabla, 
-            columns=("id", "nombre", "hora_entrada", "hora_salida", "accion"), 
+            columns=("id", "nombre", "hora_entrada", "hora_salida"), 
             show="headings",
             yscrollcommand=scrollbar.set,
             selectmode="browse"
         )
+
         
         # Configurar las columnas
         columnas = [
             ("id", "ID", 0, "w"),  # Columna oculta para el ID
             ("nombre", "Estudiante", 130, "w"),
             ("hora_entrada", "Hora de Entrada", 30, "center"),
-            ("hora_salida", "Hora de Salida", 30, "center"),
-            ("accion", "Acción", 140, "center")
+            ("hora_salida", "Hora de Salida", 30, "center")
         ]
         
         for col_id, heading, width, anchor in columnas:
@@ -1452,31 +1506,7 @@ class VentanaPrincipal:
                 stretch=tk.NO if col_id == "id" else tk.YES
             )
         
-        # Configurar el estilo para el botón de acción
-        style = ttk.Style()
         
-        # Configurar el tag para elementos clickeables con apariencia de botón
-        # Usamos caracteres especiales para simular un borde
-        self.tree_asistencias.tag_configure('clickable', 
-                                          foreground='#1d4ed8',  # Texto azul oscuro
-                                          font=('Consolas', 9, 'bold'))
-        
-        # Configurar el tag para el estado hover
-        self.tree_asistencias.tag_configure('hover', 
-                                          foreground='#1e40af',
-                                          font=('Consolas', 9, 'bold'))
-        
-        # Configurar el tag para el estado activo (click)
-        self.tree_asistencias.tag_configure('active', 
-                                          foreground='#1e3a8a',
-                                          font=('Consolas', 9, 'bold'))
-        
-        # Asegurar que la columna de acción tenga suficiente ancho
-        self.tree_asistencias.column('#5', width=150, anchor=tk.CENTER)
-        
-        # Configurar el evento de clic
-        self.tree_asistencias.bind("<Button-1>", self._on_button_click)
-        self.tree_asistencias.bind("<Motion>", self._on_motion)
         
         self.tree_asistencias.pack(side="left", fill="both", expand=True)
         scrollbar.config(command=self.tree_asistencias.yview)
@@ -1638,76 +1668,104 @@ class VentanaPrincipal:
         if not hasattr(self, 'tree_asistencias'):
             print("Error: tree_asistencias no está definido")
             return
-        # Limpiar la tabla actual
+
+        # Limpiar tabla
         for item in self.tree_asistencias.get_children():
             self.tree_asistencias.delete(item)
-        # Verificar si el controlador está disponible
+
+        # Validar controlador
         if not hasattr(self, 'controlador') or not self.controlador:
             print("Error: Controlador no disponible")
             self.tree_asistencias.insert("", "end", values=("Error: Controlador no disponible", "", "", ""))
             return
+
         try:
-            # Obtener las asistencias del día desde el controlador
+            # Obtener asistencias del día
             asistencias = self.controlador.obtener_asistencias_hoy()
-            
+
             if not asistencias:
-                # Mostrar mensaje si no hay asistencias
-                self.tree_asistencias.insert("", "end", values=("No hay asistencias registradas hoy", "", "", ""))
+                self.tree_asistencias.insert("", "end",
+                    values=("No hay asistencias registradas hoy", "", "", ""))
                 return
-            # Agregar cada asistencia al Treeview
+
+            # Procesar asistencias
             for asistencia in asistencias:
                 try:
                     registro_id = asistencia[0]
-                    nombre = asistencia[1] if len(asistencia) > 1 and asistencia[1] else ""
-                    apellido_p = asistencia[2] if len(asistencia) > 2 and asistencia[2] else ""
-                    apellido_m = asistencia[3] if len(asistencia) > 3 and asistencia[3] else ""
+                    nombre = asistencia[1] if len(asistencia) > 1 else ""
+                    apellido_p = asistencia[2] if len(asistencia) > 2 else ""
+                    apellido_m = asistencia[3] if len(asistencia) > 3 else ""
                     hora_entrada = asistencia[4] if len(asistencia) > 4 else ""
                     hora_salida = asistencia[5] if len(asistencia) > 5 else ""
-                    
+
                     nombre_completo = f"{nombre} {apellido_p} {apellido_m}".strip()
-                    
-                    # Formatear las horas
+
+                    # Formateo de horas
                     def formatear_hora(hora):
                         if not hora:
                             return ""
                         if isinstance(hora, str):
-                            if ' ' in hora:  # Si es un datetime como string
-                                return hora.split()[-1][:8]  # Extraer solo la hora
-                            return hora[:8]  # Tomar solo HH:MM:SS si es solo hora
-                        if hasattr(hora, 'strftime'):  # Si es un objeto datetime
+                            return hora.split()[-1][:8] if " " in hora else hora[:8]
+                        if hasattr(hora, "strftime"):
                             return hora.strftime("%H:%M:%S")
                         return str(hora)
-                    
+
                     hora_entrada_fmt = formatear_hora(hora_entrada)
                     hora_salida_fmt = formatear_hora(hora_salida)
-                    
-                    # Siempre mostrar el botón Registrar Salida
-                    accion = "[ REGISTRAR SALIDA ]"
-                    tags = ('clickable',)
-                        
-                    item_id = self.tree_asistencias.insert(
-                        "", 
-                        "end", 
+
+                    # Insertar fila sin columna de acción
+                    self.tree_asistencias.insert(
+                        "",
+                        "end",
                         values=(
-                            registro_id,  # ID oculto
-                            nombre_completo, 
-                            hora_entrada_fmt, 
-                            hora_salida_fmt,
-                            accion
-                        ),
-                        tags=tags
+                            registro_id,
+                            nombre_completo,
+                            hora_entrada_fmt,
+                            hora_salida_fmt
+                        )
                     )
-                    
-                    # Asegurarse de que la columna de acción tenga el ancho adecuado
-                    self.tree_asistencias.column("#5", width=120, minwidth=120, anchor=tk.CENTER)
+
                 except Exception as e:
                     print(f"Error al procesar asistencia: {e}")
                     traceback.print_exc()
                     continue
+
         except Exception as e:
             print(f"Error al actualizar asistencias: {e}")
             traceback.print_exc()
-            self.tree_asistencias.insert("", "end", values=(f"Error: {str(e)}", "", "", ""))
+            self.tree_asistencias.insert("", "end",
+                values=(f"Error: {str(e)}", "", "", ""))
+
+
+    def mostrar_notificacion_rapida(self, texto, color_fondo="#16a34a"):
+        """
+        Muestra un recuadro pequeño durante 1 segundo (tipo 'toast').
+        """
+        import tkinter as tk  # por si no está al inicio
+
+        win = tk.Toplevel(self.ventana)
+        win.overrideredirect(True)        # sin bordes
+        win.configure(bg=color_fondo)
+
+        label = tk.Label(
+            win,
+            text=texto,
+            bg=color_fondo,
+            fg="white",
+            font=("Arial", 11, "bold"),
+            padx=20,
+            pady=10
+        )
+        label.pack()
+
+        # Posición: centrado arriba de la ventana principal
+        self.ventana.update_idletasks()
+        x = self.ventana.winfo_rootx() + (self.ventana.winfo_width() - win.winfo_reqwidth()) // 2
+        y = self.ventana.winfo_rooty() + 80
+        win.geometry(f"+{x}+{y}")
+
+        # Cerrar solo
+        win.after(1000, win.destroy)
 
 
 # ---------------------------------------- Contenido de la pestaña reportes ----------------------------------------
