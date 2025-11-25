@@ -1421,9 +1421,9 @@ class VentanaPrincipal:
                 dt_entrada = datetime.combine(fecha_reg, hora_ent_time)
 
                 # Reglas del minuto mínimo
-                if ahora - dt_entrada < timedelta(minutes=1):
+                if ahora - dt_entrada < timedelta(hours=4):
                     self.mostrar_notificacion_rapida(
-                        "Debe pasar 1 minuto desde la entrada.",
+                        "Debes esperar al menos 4 horas desde tu entrada para marcar salida.",
                         color_fondo="#dc2626"
                     )
                     return
@@ -2098,10 +2098,7 @@ class VentanaPrincipal:
         except Exception as e:
             messagebox.showerror("Error", f"No se pudo generar el reporte:\n{e}")
 
-
-
-
-  
+ 
     def _mostrar_informacion_estudiante(self, estudiante):
         """Muestra la información del estudiante en el reporte, con botones fijos PDF/Excel a la derecha"""
         
@@ -2896,14 +2893,11 @@ class VentanaPrincipal:
     def _generar_pdf_alumno(self, meta: dict, carpeta_salida: str = None, dest_path: str = None) -> str:
         """
         Genera un PDF individual para el alumno usando el diseño de fondo.
-        - Si dest_path está dado, guarda ahí.
-        - En caso contrario, construye el nombre dentro de carpeta_salida.
-        Devuelve la ruta creada.
         """
+
         def slugify(s):
             s = "" if s is None else str(s)
             s = "".join(c for c in unicodedata.normalize("NFKD", s) if not unicodedata.combining(c))
-            # permitir letras, números, guiones, puntos y espacios
             s = re.sub(r"[^\w\-. ]+", "", s, flags=re.UNICODE)
             return s.strip().replace(" ", "_")
 
@@ -2950,19 +2944,18 @@ class VentanaPrincipal:
         carrera = meta.get("carrera", "") or ""
 
         # ------- PDF -------
-        pdf = FPDF()  # P, mm, A4 por defecto
+        pdf = FPDF()
         pdf.add_page()
 
         # Tamaño de página
         page_w = pdf.w
         page_h = pdf.h
 
-        # Límites dinámicos en función del alto de la página
-        # Dejamos ~45mm para el pie del membrete
+        # Límites dinámicos
         Y_MAX_CONTENIDO = page_h - 40
         Y_MAX_TABLA = page_h - 55
 
-        # Fondo (diseño.png). Se intentan varias rutas posibles.
+        # Fondo
         posibles_rutas = [
             os.path.join("public", "static", "images", "diseño.png"),
             os.path.join("public", "static", "images", "diseno.png"),
@@ -2972,49 +2965,63 @@ class VentanaPrincipal:
         try:
             for ruta_img in posibles_rutas:
                 if os.path.exists(ruta_img):
-                    # ⬇️ Ahora SIEMPRE llenamos TODA LA PÁGINA
                     pdf.image(ruta_img, x=0, y=0, w=page_w, h=page_h)
                     break
-        except Exception:
-            # Si falla la imagen, continuamos sin fondo
+        except:
             pass
 
         # Título
         pdf.set_font("Arial", "B", 20)
-        pdf.set_xy(0, 40)  # algo abajo del encabezado del diseño
+        pdf.set_xy(0, 40)
         pdf.cell(0, 10, "REPORTE DE ASISTENCIAS", ln=True, align="C")
 
-        # Línea de mes / periodo
+        # Mes / periodo
         pdf.set_font("Arial", "", 14)
         if encabezado_rango:
             pdf.cell(0, 8, encabezado_rango, ln=True, align="C")
         pdf.ln(10)
 
-        # Datos del alumno (dos columnas)
+        # ============================================================
+        #     🟦 DATOS DEL ALUMNO (con MULTI_CELL para Carrera)
+        # ============================================================
         pdf.set_font("Arial", "", 12)
         line_h = 7
+
         left_x = 15
-        right_x = 105
+        right_x = 105      # más a la izquierda para mayor espacio
+        margin_r = 15
 
-        y_ini = pdf.get_y()
-        pdf.set_xy(left_x, y_ini)
-        pdf.cell(0, line_h, f"Alumno: {nombre_alumno}", ln=False)
-        pdf.set_xy(right_x, y_ini)
-        pdf.cell(0, line_h, f"Matrícula: {matricula}", ln=True)
+        left_w = right_x - left_x - 5
+        right_w = page_w - right_x - margin_r
 
         y = pdf.get_y()
-        pdf.set_xy(left_x, y)
-        pdf.cell(0, line_h, f"Generación: {generacion}", ln=False)
-        pdf.set_xy(right_x, y)
-        pdf.cell(0, line_h, f"Asesor: {asesor}", ln=True)
 
-        y = pdf.get_y()
+        # 1️⃣ Alumno / Matrícula
         pdf.set_xy(left_x, y)
-        pdf.cell(0, line_h, f"Área: {area}", ln=False)
-        pdf.set_xy(right_x, y)
-        pdf.cell(0, line_h, f"Carrera: {carrera}", ln=True)
+        pdf.cell(left_w, line_h, f"Alumno: {nombre_alumno}", ln=0)
 
-        pdf.ln(8)
+        pdf.set_xy(right_x, y)
+        pdf.multi_cell(right_w, line_h, f"Matrícula: {matricula}")
+        y = max(y + line_h, pdf.get_y())
+
+        # 2️⃣ Generación / Asesor
+        pdf.set_xy(left_x, y)
+        pdf.cell(left_w, line_h, f"Generación: {generacion}", ln=0)
+
+        pdf.set_xy(right_x, y)
+        pdf.multi_cell(right_w, line_h, f"Asesor: {asesor}")
+        y = max(y + line_h, pdf.get_y())
+
+        # 3️⃣ Área / Carrera (carrera con salto automático)
+        pdf.set_xy(left_x, y)
+        pdf.cell(left_w, line_h, f"Área: {area}", ln=0)
+
+        pdf.set_xy(right_x, y)
+        pdf.multi_cell(right_w, line_h, f"Carrera: {carrera}")
+        y = max(y + line_h, pdf.get_y())
+
+        pdf.set_y(y + 5)
+        # ============================================================
 
         # Resumen
         pdf.set_font("Arial", "B", 12)
@@ -3028,29 +3035,25 @@ class VentanaPrincipal:
 
         pdf.ln(10)
 
-        # Historial de asistencias
+        # Historial
         pdf.set_font("Arial", "B", 12)
         pdf.cell(0, line_h, "Historial de Asistencias", ln=True)
         pdf.ln(2)
 
-        # ---------- TABLA DE HISTORIAL ----------
+        # Tabla
         pdf.set_font("Arial", "B", 10)
         col_w = [40, 40, 40, 40]
         headers = ["Fecha", "Hora Entrada", "Hora Salida", "Horas Presentes"]
-
         ALTURA_FILA = 7
 
-        # encabezados de la tabla
         for w, h in zip(col_w, headers):
             pdf.cell(w, 8, h, border=1, align="C")
         pdf.ln(8)
 
         pdf.set_font("Arial", "", 9)
         for reg in historial:
-            # Si la siguiente fila no cabe antes del pie, nueva página con fondo y encabezados
             if pdf.get_y() + ALTURA_FILA > Y_MAX_TABLA:
                 pdf.add_page()
-                # actualizar medidas por si algo cambia
                 page_w = pdf.w
                 page_h = pdf.h
                 Y_MAX_CONTENIDO = page_h - 40
@@ -3061,13 +3064,11 @@ class VentanaPrincipal:
                         if os.path.exists(ruta_img):
                             pdf.image(ruta_img, x=0, y=0, w=page_w, h=page_h)
                             break
-                except Exception:
+                except:
                     pass
 
-                # bajar debajo del encabezado del membrete superior
                 pdf.set_y(50)
 
-                # Reimprimir encabezados de tabla en la nueva página
                 pdf.set_font("Arial", "B", 10)
                 for w, h in zip(col_w, headers):
                     pdf.cell(w, 8, h, border=1, align="C")
@@ -3080,10 +3081,9 @@ class VentanaPrincipal:
             pdf.cell(col_w[3], ALTURA_FILA, str(reg.get("horas_presentes", "")), border=1, align="C")
             pdf.ln(ALTURA_FILA)
 
-        # ---------- FIRMA DEL ASESOR AL FINAL ----------
-        FIRMA_ALTURA = 22  # espacio necesario para línea + texto
+        # Firma
+        FIRMA_ALTURA = 22
 
-        # si no cabe la firma sin pisar el pie, nueva página
         if pdf.get_y() + FIRMA_ALTURA > Y_MAX_CONTENIDO:
             pdf.add_page()
             page_w = pdf.w
@@ -3096,10 +3096,9 @@ class VentanaPrincipal:
                     if os.path.exists(ruta_img):
                         pdf.image(ruta_img, x=0, y=0, w=page_w, h=page_h)
                         break
-            except Exception:
+            except:
                 pass
 
-        # colocamos la firma cerca de la parte baja pero arriba del membrete
         y_firma = max(pdf.get_y() + 10, Y_MAX_CONTENIDO - FIRMA_ALTURA)
         pdf.set_y(y_firma)
 
@@ -3111,7 +3110,7 @@ class VentanaPrincipal:
         pdf.ln(2)
         pdf.cell(0, 6, texto_asesor, ln=True, align="C")
 
-        # ============== PROTECCIÓN (si la librería lo soporta) ==============
+        # Protección
         if hasattr(pdf, "set_encryption"):
             try:
                 pdf.set_encryption(
@@ -3122,15 +3121,11 @@ class VentanaPrincipal:
                         AccessPermission.PRINT_HIGH_RES
                     )
                 )
-            except Exception as e:
-                print(f"ADVERTENCIA: No se pudo aplicar protección al PDF: {e}")
-        else:
-            print("ADVERTENCIA: Esta versión de FPDF no tiene set_encryption (no es fpdf2).")
-        # ====================================================================
+            except:
+                pass
 
         pdf.output(dest_path)
         return dest_path
-
 
 
     def _enviar_reporte_generacion_por_correo(self, top):
