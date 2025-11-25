@@ -19,7 +19,6 @@ from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
 from datetime import datetime
 from openpyxl import Workbook
 from openpyxl.utils.dataframe import dataframe_to_rows
-from config.email import send_mail
 import tempfile, os, shutil
 import os, unicodedata, re
 
@@ -1422,9 +1421,9 @@ class VentanaPrincipal:
                 dt_entrada = datetime.combine(fecha_reg, hora_ent_time)
 
                 # Reglas del minuto mínimo
-                if ahora - dt_entrada < timedelta(minutes=1):
+                if ahora - dt_entrada < timedelta(hours=4):
                     self.mostrar_notificacion_rapida(
-                        "Debe pasar 1 minuto desde la entrada.",
+                        "Debes esperar al menos 4 horas desde tu entrada para marcar salida.",
                         color_fondo="#dc2626"
                     )
                     return
@@ -2099,10 +2098,7 @@ class VentanaPrincipal:
         except Exception as e:
             messagebox.showerror("Error", f"No se pudo generar el reporte:\n{e}")
 
-
-
-
-  
+ 
     def _mostrar_informacion_estudiante(self, estudiante):
         """Muestra la información del estudiante en el reporte, con botones fijos PDF/Excel a la derecha"""
         
@@ -2897,14 +2893,11 @@ class VentanaPrincipal:
     def _generar_pdf_alumno(self, meta: dict, carpeta_salida: str = None, dest_path: str = None) -> str:
         """
         Genera un PDF individual para el alumno usando el diseño de fondo.
-        - Si dest_path está dado, guarda ahí.
-        - En caso contrario, construye el nombre dentro de carpeta_salida.
-        Devuelve la ruta creada.
         """
+
         def slugify(s):
             s = "" if s is None else str(s)
             s = "".join(c for c in unicodedata.normalize("NFKD", s) if not unicodedata.combining(c))
-            # permitir letras, números, guiones, puntos y espacios
             s = re.sub(r"[^\w\-. ]+", "", s, flags=re.UNICODE)
             return s.strip().replace(" ", "_")
 
@@ -2951,10 +2944,18 @@ class VentanaPrincipal:
         carrera = meta.get("carrera", "") or ""
 
         # ------- PDF -------
-        pdf = FPDF()  # P, mm, A4 por defecto
+        pdf = FPDF()
         pdf.add_page()
 
-        # Fondo (diseño.png). Se intentan varias rutas posibles.
+        # Tamaño de página
+        page_w = pdf.w
+        page_h = pdf.h
+
+        # Límites dinámicos
+        Y_MAX_CONTENIDO = page_h - 40
+        Y_MAX_TABLA = page_h - 55
+
+        # Fondo
         posibles_rutas = [
             os.path.join("public", "static", "images", "diseño.png"),
             os.path.join("public", "static", "images", "diseno.png"),
@@ -2964,48 +2965,63 @@ class VentanaPrincipal:
         try:
             for ruta_img in posibles_rutas:
                 if os.path.exists(ruta_img):
-                    pdf.image(ruta_img, x=0, y=0, w=pdf.w)
+                    pdf.image(ruta_img, x=0, y=0, w=page_w, h=page_h)
                     break
-        except Exception:
-            # Si falla la imagen, continuamos sin fondo
+        except:
             pass
 
         # Título
         pdf.set_font("Arial", "B", 20)
-        pdf.set_xy(0, 40)  # algo abajo del encabezado del diseño
+        pdf.set_xy(0, 40)
         pdf.cell(0, 10, "REPORTE DE ASISTENCIAS", ln=True, align="C")
 
-        # Línea de mes / periodo
+        # Mes / periodo
         pdf.set_font("Arial", "", 14)
         if encabezado_rango:
             pdf.cell(0, 8, encabezado_rango, ln=True, align="C")
         pdf.ln(10)
 
-        # Datos del alumno (dos columnas)
+        # ============================================================
+        #     🟦 DATOS DEL ALUMNO (con MULTI_CELL para Carrera)
+        # ============================================================
         pdf.set_font("Arial", "", 12)
         line_h = 7
-        left_x = 20
-        right_x = 115
 
-        y_ini = pdf.get_y()
-        pdf.set_xy(left_x, y_ini)
-        pdf.cell(0, line_h, f"Alumno: {nombre_alumno}", ln=False)
-        pdf.set_xy(right_x, y_ini)
-        pdf.cell(0, line_h, f"Matrícula: {matricula}", ln=True)
+        left_x = 15
+        right_x = 105      # más a la izquierda para mayor espacio
+        margin_r = 15
 
-        y = pdf.get_y()
-        pdf.set_xy(left_x, y)
-        pdf.cell(0, line_h, f"Generación: {generacion}", ln=False)
-        pdf.set_xy(right_x, y)
-        pdf.cell(0, line_h, f"Asesor: {asesor}", ln=True)
+        left_w = right_x - left_x - 5
+        right_w = page_w - right_x - margin_r
 
         y = pdf.get_y()
-        pdf.set_xy(left_x, y)
-        pdf.cell(0, line_h, f"Área: {area}", ln=False)
-        pdf.set_xy(right_x, y)
-        pdf.cell(0, line_h, f"Carrera: {carrera}", ln=True)
 
-        pdf.ln(8)
+        # 1️⃣ Alumno / Matrícula
+        pdf.set_xy(left_x, y)
+        pdf.cell(left_w, line_h, f"Alumno: {nombre_alumno}", ln=0)
+
+        pdf.set_xy(right_x, y)
+        pdf.multi_cell(right_w, line_h, f"Matrícula: {matricula}")
+        y = max(y + line_h, pdf.get_y())
+
+        # 2️⃣ Generación / Asesor
+        pdf.set_xy(left_x, y)
+        pdf.cell(left_w, line_h, f"Generación: {generacion}", ln=0)
+
+        pdf.set_xy(right_x, y)
+        pdf.multi_cell(right_w, line_h, f"Asesor: {asesor}")
+        y = max(y + line_h, pdf.get_y())
+
+        # 3️⃣ Área / Carrera (carrera con salto automático)
+        pdf.set_xy(left_x, y)
+        pdf.cell(left_w, line_h, f"Área: {area}", ln=0)
+
+        pdf.set_xy(right_x, y)
+        pdf.multi_cell(right_w, line_h, f"Carrera: {carrera}")
+        y = max(y + line_h, pdf.get_y())
+
+        pdf.set_y(y + 5)
+        # ============================================================
 
         # Resumen
         pdf.set_font("Arial", "B", 12)
@@ -3019,43 +3035,40 @@ class VentanaPrincipal:
 
         pdf.ln(10)
 
-        # Historial de asistencias
+        # Historial
         pdf.set_font("Arial", "B", 12)
         pdf.cell(0, line_h, "Historial de Asistencias", ln=True)
         pdf.ln(2)
 
-        # ---------- TABLA DE HISTORIAL ----------
+        # Tabla
         pdf.set_font("Arial", "B", 10)
         col_w = [40, 40, 40, 40]
         headers = ["Fecha", "Hora Entrada", "Hora Salida", "Horas Presentes"]
-
-        # límites seguros para no pisar el membrete del pie
         ALTURA_FILA = 7
-        Y_MAX_TABLA = 235   # máximo Y para iniciar una fila de tabla
-        Y_MAX_CONTENIDO = 240  # límite para contenido (antes del pie)
 
-        # encabezados de la tabla
         for w, h in zip(col_w, headers):
             pdf.cell(w, 8, h, border=1, align="C")
         pdf.ln(8)
 
         pdf.set_font("Arial", "", 9)
         for reg in historial:
-            # Si la siguiente fila no cabe antes del pie, nueva página con fondo y encabezados
             if pdf.get_y() + ALTURA_FILA > Y_MAX_TABLA:
                 pdf.add_page()
+                page_w = pdf.w
+                page_h = pdf.h
+                Y_MAX_CONTENIDO = page_h - 40
+                Y_MAX_TABLA = page_h - 55
+
                 try:
                     for ruta_img in posibles_rutas:
                         if os.path.exists(ruta_img):
-                            pdf.image(ruta_img, x=0, y=0, w=pdf.w)
+                            pdf.image(ruta_img, x=0, y=0, w=page_w, h=page_h)
                             break
-                except Exception:
+                except:
                     pass
 
-                # 🔹 MUY IMPORTANTE: bajar debajo del membrete superior
-                pdf.set_y(50)  # ajusta 75/85 según tu diseño
+                pdf.set_y(50)
 
-                # Reimprimir encabezados de tabla en la nueva página
                 pdf.set_font("Arial", "B", 10)
                 for w, h in zip(col_w, headers):
                     pdf.cell(w, 8, h, border=1, align="C")
@@ -3068,176 +3081,218 @@ class VentanaPrincipal:
             pdf.cell(col_w[3], ALTURA_FILA, str(reg.get("horas_presentes", "")), border=1, align="C")
             pdf.ln(ALTURA_FILA)
 
+        # Firma
+        FIRMA_ALTURA = 22
 
-        # ---------- FIRMA DEL ASESOR AL FINAL ----------
-        FIRMA_ALTURA = 22  # espacio necesario para línea + texto
-
-        # si no cabe la firma sin pisar el pie, nueva página
         if pdf.get_y() + FIRMA_ALTURA > Y_MAX_CONTENIDO:
             pdf.add_page()
+            page_w = pdf.w
+            page_h = pdf.h
+            Y_MAX_CONTENIDO = page_h - 40
+            Y_MAX_TABLA = page_h - 55
+
             try:
                 for ruta_img in posibles_rutas:
                     if os.path.exists(ruta_img):
-                        pdf.image(ruta_img, x=0, y=0, w=pdf.w)
+                        pdf.image(ruta_img, x=0, y=0, w=page_w, h=page_h)
                         break
-            except Exception:
+            except:
                 pass
 
-        # colocamos la firma cerca de la parte baja pero arriba del membrete
         y_firma = max(pdf.get_y() + 10, Y_MAX_CONTENIDO - FIRMA_ALTURA)
         pdf.set_y(y_firma)
 
         pdf.set_font("Arial", "", 11)
         pdf.ln(4)
-        # línea de firma centrada
         pdf.cell(0, 6, "______________________________", ln=True, align="C")
 
         texto_asesor = f"Asesor: {asesor}" if asesor else "Asesor"
         pdf.ln(2)
         pdf.cell(0, 6, texto_asesor, ln=True, align="C")
 
-        # ============== PROTECCIÓN (si la librería lo soporta) ==============
+        # Protección
         if hasattr(pdf, "set_encryption"):
             try:
                 pdf.set_encryption(
-                    owner_password="12345",    # contraseña para modificar/quitar protección
-                    user_password=None,        # None o "" => se abre sin pedir contraseña
+                    owner_password="12345",
+                    user_password=None,
                     permissions=(
                         AccessPermission.PRINT_LOW_RES |
                         AccessPermission.PRINT_HIGH_RES
-                    )  # ✅ solo se permite imprimir, NO copiar/editar
+                    )
                 )
-            except Exception as e:
-                print(f"ADVERTENCIA: No se pudo aplicar protección al PDF: {e}")
-        else:
-            print("ADVERTENCIA: Esta versión de FPDF no tiene set_encryption (no es fpdf2).")
-        # ====================================================================
+            except:
+                pass
 
         pdf.output(dest_path)
-        
         return dest_path
 
 
     def _enviar_reporte_generacion_por_correo(self, top):
-            """Genera y envía por correo un PDF individual a cada alumno (seleccionados o todos).
-            Envía 2 correos por alumno: uno al alumno y otro al asesor (si hay), con textos distintos.
-            """
-            from tkinter import messagebox
-            import tempfile, shutil, time
+        """
+        Genera y envía por correo un PDF individual a cada alumno (seleccionados o todos).
+        Se ejecuta en un hilo secundario para no congelar la interfaz.
+        """
+        import threading
+        import tempfile, shutil, time
+        from tkinter import messagebox
 
-            # Mailer
+        # Aviso rápido (no bloqueante) de que empezó el envío
+        if hasattr(self, "mostrar_notificacion_rapida"):
+            self.mostrar_notificacion_rapida("Enviando reportes por correo...", "#2563eb")
+
+        def worker():
+            # Todo el trabajo pesado va aquí, en otro hilo
             try:
-                from config.email import send_mail
-            except Exception:
-                send_mail = None
-
-            if send_mail is None:
-                messagebox.showerror(
-                    "Correo no disponible",
-                    "No se encontró config.emailer.send_mail. Configura config/.env y config/emailer.py."
-                )
-                return
-
-            # Validación de datos cargados
-            if not hasattr(self, "_tv_gen") or not hasattr(self, "_gen_row_meta"):
-                messagebox.showerror("Error", "No hay datos cargados. Usa 'Mostrar' antes de enviar.")
-                return
-
-            # Selección vs todos
-            seleccion = list(self._tv_gen.selection())
-            if seleccion:
-                metas = [self._gen_row_meta[i] for i in seleccion if i in self._gen_row_meta]
-            else:
-                metas = [self._gen_row_meta[i] for i in self._tv_gen.get_children() if i in self._gen_row_meta]
-
-            if not metas:
-                messagebox.showinfo("Sin destinatarios", "No hay alumnos para enviar.")
-                return
-
-            # Helper para el texto del periodo (mes/año o rango)
-            def _texto_periodo_local(meta: dict) -> str:
-                f = meta.get("filtros", {}) if isinstance(meta, dict) else {}
-                mes = f.get("mes"); anio = f.get("anio")
-                fi = f.get("fecha_inicio"); ff = f.get("fecha_fin")
+                # Mailer
                 try:
-                    mes_nombre = self.combo_mes.get()
+                    from config.email import send_mail
                 except Exception:
-                    mes_nombre = str(mes) if mes else ""
-                if mes and anio:
-                    return f"{mes_nombre} {anio}"
-                if fi and ff:
-                    return f"del {fi} al {ff}"
-                return "del periodo seleccionado"
+                    send_mail = None
 
-            tmpdir = tempfile.mkdtemp(prefix="reportes_ind_")
-            enviados, sin_correo, errores = 0, 0, 0
+                if send_mail is None:
+                    # Mostrar error en el hilo principal
+                    self.ventana.after(
+                        0,
+                        lambda: messagebox.showerror(
+                            "Correo no disponible",
+                            "No se encontró config.emailer.send_mail. Configura config/.env y config/emailer.py."
+                        )
+                    )
+                    return
 
-            try:
-                for meta in metas:
-                    correo_alumno = (meta.get("email") or "").strip()
-                    if not correo_alumno:
-                        sin_correo += 1
-                        continue
+                # Validación de datos cargados
+                if not hasattr(self, "_tv_gen") or not hasattr(self, "_gen_row_meta"):
+                    self.ventana.after(
+                        0,
+                        lambda: messagebox.showerror(
+                            "Error",
+                            "No hay datos cargados. Usa 'Mostrar' antes de enviar."
+                        )
+                    )
+                    return
 
+                # Selección vs todos
+                seleccion = list(self._tv_gen.selection())
+                if seleccion:
+                    metas = [self._gen_row_meta[i] for i in seleccion if i in self._gen_row_meta]
+                else:
+                    metas = [self._gen_row_meta[i] for i in self._tv_gen.get_children() if i in self._gen_row_meta]
+
+                if not metas:
+                    self.ventana.after(
+                        0,
+                        lambda: messagebox.showinfo("Sin destinatarios", "No hay alumnos para enviar.")
+                    )
+                    return
+
+                # Helper para el texto del periodo (mes/año o rango)
+                def _texto_periodo_local(meta: dict) -> str:
+                    f = meta.get("filtros", {}) if isinstance(meta, dict) else {}
+                    mes = f.get("mes"); anio = f.get("anio")
+                    fi = f.get("fecha_inicio"); ff = f.get("fecha_fin")
                     try:
-                        # Genera PDF individual en carpeta temporal
-                        pdf_path = self._generar_pdf_alumno(meta, carpeta_salida=tmpdir)
+                        mes_nombre = self.combo_mes.get()
+                    except Exception:
+                        mes_nombre = str(mes) if mes else ""
+                    if mes and anio:
+                        return f"{mes_nombre} {anio}"
+                    if fi and ff:
+                        return f"del {fi} al {ff}"
+                    return "del periodo seleccionado"
 
-                        periodo_txt = _texto_periodo_local(meta)
-                        alumno_nombre = meta.get("nombre", "")
-                        alumno_matricula = str(meta.get("matricula", "") or "")
-                        asesor_email = (meta.get("asesor_email") or "").strip()
-                        asesor_nombre = (meta.get("asesor") or "").strip()
+                tmpdir = tempfile.mkdtemp(prefix="reportes_ind_")
+                enviados, sin_correo, errores = 0, 0, 0
+                errores_detalle = []
 
-                        # ----- Correo al ALUMNO -----
-                        cuerpo_alumno = (
-                            f"Hola {alumno_nombre},\n\n"
-                            f"Adjunto encontrarás tu reporte de asistencias {periodo_txt}.\n\n"
-                            "Saludos."
-                        )
-                        send_mail(
-                            subject=f"Reporte de asistencias — {alumno_nombre} — {periodo_txt}",
-                            body=cuerpo_alumno,
-                            to_list=[correo_alumno],
-                            attachments=[pdf_path]
-                        )
-                        enviados += 1
+                try:
+                    for meta in metas:
+                        correo_alumno = (meta.get("email") or "").strip()
+                        if not correo_alumno:
+                            sin_correo += 1
+                            continue
 
-                        # ----- Correo al ASESOR (si hay) -----
-                        if asesor_email:
-                            saludo = f"Hola {asesor_nombre}," if asesor_nombre else "Hola,"
-                            cuerpo_asesor = (
-                                f"{saludo}\n\n"
-                                f"Adjunto el reporte mensual de asistencias del alumno "
-                                f"{alumno_nombre} ({alumno_matricula}) correspondiente a {periodo_txt}.\n\n"
-                                "Quedo atento(a) a cualquier comentario.\n\nSaludos."
+                        try:
+                            # Genera PDF individual en carpeta temporal
+                            pdf_path = self._generar_pdf_alumno(meta, carpeta_salida=tmpdir)
+
+                            periodo_txt = _texto_periodo_local(meta)
+                            alumno_nombre = meta.get("nombre", "")
+                            alumno_matricula = str(meta.get("matricula", "") or "")
+                            asesor_email = (meta.get("asesor_email") or "").strip()
+                            asesor_nombre = (meta.get("asesor") or "").strip()
+
+                            # ----- Correo al ALUMNO -----
+                            cuerpo_alumno = (
+                                f"Hola {alumno_nombre},\n\n"
+                                f"Adjunto encontrarás tu reporte de asistencias {periodo_txt}.\n\n"
+                                "Saludos."
                             )
                             send_mail(
-                                subject=f"Reporte del alumno {alumno_nombre} — {periodo_txt}",
-                                body=cuerpo_asesor,
-                                to_list=[asesor_email],
+                                subject=f"Reporte de asistencias — {alumno_nombre} — {periodo_txt}",
+                                body=cuerpo_alumno,
+                                to_list=[correo_alumno],
                                 attachments=[pdf_path]
                             )
+                            enviados += 1
 
-                        # Pausa corta para evitar throttling del servidor SMTP
-                        time.sleep(0.4)
+                            # ----- Correo al ASESOR (si hay) -----
+                            if asesor_email:
+                                saludo = f"Hola {asesor_nombre}," if asesor_nombre else "Hola,"
+                                cuerpo_asesor = (
+                                    f"{saludo}\n\n"
+                                    f"Adjunto el reporte mensual de asistencias del alumno "
+                                    f"{alumno_nombre} ({alumno_matricula}) correspondiente a {periodo_txt}.\n\n"
+                                    "Quedo atento(a) a cualquier comentario.\n\nSaludos."
+                                )
+                                send_mail(
+                                    subject=f"Reporte del alumno {alumno_nombre} — {periodo_txt}",
+                                    body=cuerpo_asesor,
+                                    to_list=[asesor_email],
+                                    attachments=[pdf_path]
+                                )
 
-                    except Exception as e:
-                        errores += 1
-                        messagebox.showerror("Error de envío", f"Alumno: {correo_alumno}\n\n{e}")
+                            # Pausa corta para evitar throttling del servidor SMTP
+                            time.sleep(0.4)
 
-            finally:
-                # Limpieza de temporales
-                try:
-                    shutil.rmtree(tmpdir, ignore_errors=True)
-                except Exception:
-                    pass
+                        except Exception as e:
+                            errores += 1
+                            errores_detalle.append(f"{correo_alumno}: {e}")
 
-            messagebox.showinfo(
-                "Envío de reportes",
-                f"Enviados: {enviados}\nSin correo: {sin_correo}\nErrores: {errores}"
-            )
-  
+                finally:
+                    # Limpieza de temporales
+                    try:
+                        shutil.rmtree(tmpdir, ignore_errors=True)
+                    except Exception:
+                        pass
+
+                # Mostrar resumen en el hilo principal
+                def mostrar_resumen():
+                    msg = f"Enviados: {enviados}\nSin correo: {sin_correo}\nErrores: {errores}"
+                    if errores_detalle:
+                        msg += "\n\nDetalles de errores:\n" + "\n".join(errores_detalle[:5])
+                        if len(errores_detalle) > 5:
+                            msg += f"\n(+ {len(errores_detalle) - 5} más...)"
+                    messagebox.showinfo("Envío de reportes", msg)
+
+                    # Si quieres cerrar la ventana 'top' al terminar:
+                    try:
+                        if top is not None and top.winfo_exists():
+                            top.destroy()
+                    except Exception:
+                        pass
+
+                self.ventana.after(0, mostrar_resumen)
+
+            except Exception as e:
+                # Cualquier fallo inesperado lo reportamos también en el hilo principal
+                def mostrar_error_final():
+                    messagebox.showerror("Error", f"Ocurrió un error durante el envío de correos:\n{e}")
+                self.ventana.after(0, mostrar_error_final)
+
+        # Lanzar el hilo en segundo plano
+        threading.Thread(target=worker, daemon=True).start()
+
     def _exportar_pdf_usuario(self):
         self.exportar_reporte_usuario(formato="pdf")
 
