@@ -2954,6 +2954,15 @@ class VentanaPrincipal:
         pdf = FPDF()  # P, mm, A4 por defecto
         pdf.add_page()
 
+        # Tamaño de página
+        page_w = pdf.w
+        page_h = pdf.h
+
+        # Límites dinámicos en función del alto de la página
+        # Dejamos ~45mm para el pie del membrete
+        Y_MAX_CONTENIDO = page_h - 40
+        Y_MAX_TABLA = page_h - 55
+
         # Fondo (diseño.png). Se intentan varias rutas posibles.
         posibles_rutas = [
             os.path.join("public", "static", "images", "diseño.png"),
@@ -2964,7 +2973,8 @@ class VentanaPrincipal:
         try:
             for ruta_img in posibles_rutas:
                 if os.path.exists(ruta_img):
-                    pdf.image(ruta_img, x=0, y=0, w=pdf.w)
+                    # ⬇️ Ahora SIEMPRE llenamos TODA LA PÁGINA
+                    pdf.image(ruta_img, x=0, y=0, w=page_w, h=page_h)
                     break
         except Exception:
             # Si falla la imagen, continuamos sin fondo
@@ -3029,10 +3039,7 @@ class VentanaPrincipal:
         col_w = [40, 40, 40, 40]
         headers = ["Fecha", "Hora Entrada", "Hora Salida", "Horas Presentes"]
 
-        # límites seguros para no pisar el membrete del pie
         ALTURA_FILA = 7
-        Y_MAX_TABLA = 235   # máximo Y para iniciar una fila de tabla
-        Y_MAX_CONTENIDO = 240  # límite para contenido (antes del pie)
 
         # encabezados de la tabla
         for w, h in zip(col_w, headers):
@@ -3044,16 +3051,22 @@ class VentanaPrincipal:
             # Si la siguiente fila no cabe antes del pie, nueva página con fondo y encabezados
             if pdf.get_y() + ALTURA_FILA > Y_MAX_TABLA:
                 pdf.add_page()
+                # actualizar medidas por si algo cambia
+                page_w = pdf.w
+                page_h = pdf.h
+                Y_MAX_CONTENIDO = page_h - 40
+                Y_MAX_TABLA = page_h - 55
+
                 try:
                     for ruta_img in posibles_rutas:
                         if os.path.exists(ruta_img):
-                            pdf.image(ruta_img, x=0, y=0, w=pdf.w)
+                            pdf.image(ruta_img, x=0, y=0, w=page_w, h=page_h)
                             break
                 except Exception:
                     pass
 
-                # 🔹 MUY IMPORTANTE: bajar debajo del membrete superior
-                pdf.set_y(50)  # ajusta 75/85 según tu diseño
+                # bajar debajo del encabezado del membrete superior
+                pdf.set_y(50)
 
                 # Reimprimir encabezados de tabla en la nueva página
                 pdf.set_font("Arial", "B", 10)
@@ -3068,17 +3081,21 @@ class VentanaPrincipal:
             pdf.cell(col_w[3], ALTURA_FILA, str(reg.get("horas_presentes", "")), border=1, align="C")
             pdf.ln(ALTURA_FILA)
 
-
         # ---------- FIRMA DEL ASESOR AL FINAL ----------
         FIRMA_ALTURA = 22  # espacio necesario para línea + texto
 
         # si no cabe la firma sin pisar el pie, nueva página
         if pdf.get_y() + FIRMA_ALTURA > Y_MAX_CONTENIDO:
             pdf.add_page()
+            page_w = pdf.w
+            page_h = pdf.h
+            Y_MAX_CONTENIDO = page_h - 40
+            Y_MAX_TABLA = page_h - 55
+
             try:
                 for ruta_img in posibles_rutas:
                     if os.path.exists(ruta_img):
-                        pdf.image(ruta_img, x=0, y=0, w=pdf.w)
+                        pdf.image(ruta_img, x=0, y=0, w=page_w, h=page_h)
                         break
             except Exception:
                 pass
@@ -3089,7 +3106,6 @@ class VentanaPrincipal:
 
         pdf.set_font("Arial", "", 11)
         pdf.ln(4)
-        # línea de firma centrada
         pdf.cell(0, 6, "______________________________", ln=True, align="C")
 
         texto_asesor = f"Asesor: {asesor}" if asesor else "Asesor"
@@ -3100,12 +3116,12 @@ class VentanaPrincipal:
         if hasattr(pdf, "set_encryption"):
             try:
                 pdf.set_encryption(
-                    owner_password="12345",    # contraseña para modificar/quitar protección
-                    user_password=None,        # None o "" => se abre sin pedir contraseña
+                    owner_password="12345",
+                    user_password=None,
                     permissions=(
                         AccessPermission.PRINT_LOW_RES |
                         AccessPermission.PRINT_HIGH_RES
-                    )  # ✅ solo se permite imprimir, NO copiar/editar
+                    )
                 )
             except Exception as e:
                 print(f"ADVERTENCIA: No se pudo aplicar protección al PDF: {e}")
@@ -3114,8 +3130,8 @@ class VentanaPrincipal:
         # ====================================================================
 
         pdf.output(dest_path)
-        
         return dest_path
+
 
 
     def _enviar_reporte_generacion_por_correo(self, top):
