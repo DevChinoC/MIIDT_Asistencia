@@ -19,7 +19,6 @@ from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
 from datetime import datetime
 from openpyxl import Workbook
 from openpyxl.utils.dataframe import dataframe_to_rows
-from config.email import send_mail
 import tempfile, os, shutil
 import os, unicodedata, re
 
@@ -2994,8 +2993,8 @@ class VentanaPrincipal:
         # Datos del alumno (dos columnas)
         pdf.set_font("Arial", "", 12)
         line_h = 7
-        left_x = 20
-        right_x = 115
+        left_x = 15
+        right_x = 105
 
         y_ini = pdf.get_y()
         pdf.set_xy(left_x, y_ini)
@@ -3135,125 +3134,170 @@ class VentanaPrincipal:
 
 
     def _enviar_reporte_generacion_por_correo(self, top):
-            """Genera y envía por correo un PDF individual a cada alumno (seleccionados o todos).
-            Envía 2 correos por alumno: uno al alumno y otro al asesor (si hay), con textos distintos.
-            """
-            from tkinter import messagebox
-            import tempfile, shutil, time
+        """
+        Genera y envía por correo un PDF individual a cada alumno (seleccionados o todos).
+        Se ejecuta en un hilo secundario para no congelar la interfaz.
+        """
+        import threading
+        import tempfile, shutil, time
+        from tkinter import messagebox
 
-            # Mailer
+        # Aviso rápido (no bloqueante) de que empezó el envío
+        if hasattr(self, "mostrar_notificacion_rapida"):
+            self.mostrar_notificacion_rapida("Enviando reportes por correo...", "#2563eb")
+
+        def worker():
+            # Todo el trabajo pesado va aquí, en otro hilo
             try:
-                from config.email import send_mail
-            except Exception:
-                send_mail = None
-
-            if send_mail is None:
-                messagebox.showerror(
-                    "Correo no disponible",
-                    "No se encontró config.emailer.send_mail. Configura config/.env y config/emailer.py."
-                )
-                return
-
-            # Validación de datos cargados
-            if not hasattr(self, "_tv_gen") or not hasattr(self, "_gen_row_meta"):
-                messagebox.showerror("Error", "No hay datos cargados. Usa 'Mostrar' antes de enviar.")
-                return
-
-            # Selección vs todos
-            seleccion = list(self._tv_gen.selection())
-            if seleccion:
-                metas = [self._gen_row_meta[i] for i in seleccion if i in self._gen_row_meta]
-            else:
-                metas = [self._gen_row_meta[i] for i in self._tv_gen.get_children() if i in self._gen_row_meta]
-
-            if not metas:
-                messagebox.showinfo("Sin destinatarios", "No hay alumnos para enviar.")
-                return
-
-            # Helper para el texto del periodo (mes/año o rango)
-            def _texto_periodo_local(meta: dict) -> str:
-                f = meta.get("filtros", {}) if isinstance(meta, dict) else {}
-                mes = f.get("mes"); anio = f.get("anio")
-                fi = f.get("fecha_inicio"); ff = f.get("fecha_fin")
+                # Mailer
                 try:
-                    mes_nombre = self.combo_mes.get()
+                    from config.email import send_mail
                 except Exception:
-                    mes_nombre = str(mes) if mes else ""
-                if mes and anio:
-                    return f"{mes_nombre} {anio}"
-                if fi and ff:
-                    return f"del {fi} al {ff}"
-                return "del periodo seleccionado"
+                    send_mail = None
 
-            tmpdir = tempfile.mkdtemp(prefix="reportes_ind_")
-            enviados, sin_correo, errores = 0, 0, 0
+                if send_mail is None:
+                    # Mostrar error en el hilo principal
+                    self.ventana.after(
+                        0,
+                        lambda: messagebox.showerror(
+                            "Correo no disponible",
+                            "No se encontró config.emailer.send_mail. Configura config/.env y config/emailer.py."
+                        )
+                    )
+                    return
 
-            try:
-                for meta in metas:
-                    correo_alumno = (meta.get("email") or "").strip()
-                    if not correo_alumno:
-                        sin_correo += 1
-                        continue
+                # Validación de datos cargados
+                if not hasattr(self, "_tv_gen") or not hasattr(self, "_gen_row_meta"):
+                    self.ventana.after(
+                        0,
+                        lambda: messagebox.showerror(
+                            "Error",
+                            "No hay datos cargados. Usa 'Mostrar' antes de enviar."
+                        )
+                    )
+                    return
 
+                # Selección vs todos
+                seleccion = list(self._tv_gen.selection())
+                if seleccion:
+                    metas = [self._gen_row_meta[i] for i in seleccion if i in self._gen_row_meta]
+                else:
+                    metas = [self._gen_row_meta[i] for i in self._tv_gen.get_children() if i in self._gen_row_meta]
+
+                if not metas:
+                    self.ventana.after(
+                        0,
+                        lambda: messagebox.showinfo("Sin destinatarios", "No hay alumnos para enviar.")
+                    )
+                    return
+
+                # Helper para el texto del periodo (mes/año o rango)
+                def _texto_periodo_local(meta: dict) -> str:
+                    f = meta.get("filtros", {}) if isinstance(meta, dict) else {}
+                    mes = f.get("mes"); anio = f.get("anio")
+                    fi = f.get("fecha_inicio"); ff = f.get("fecha_fin")
                     try:
-                        # Genera PDF individual en carpeta temporal
-                        pdf_path = self._generar_pdf_alumno(meta, carpeta_salida=tmpdir)
+                        mes_nombre = self.combo_mes.get()
+                    except Exception:
+                        mes_nombre = str(mes) if mes else ""
+                    if mes and anio:
+                        return f"{mes_nombre} {anio}"
+                    if fi and ff:
+                        return f"del {fi} al {ff}"
+                    return "del periodo seleccionado"
 
-                        periodo_txt = _texto_periodo_local(meta)
-                        alumno_nombre = meta.get("nombre", "")
-                        alumno_matricula = str(meta.get("matricula", "") or "")
-                        asesor_email = (meta.get("asesor_email") or "").strip()
-                        asesor_nombre = (meta.get("asesor") or "").strip()
+                tmpdir = tempfile.mkdtemp(prefix="reportes_ind_")
+                enviados, sin_correo, errores = 0, 0, 0
+                errores_detalle = []
 
-                        # ----- Correo al ALUMNO -----
-                        cuerpo_alumno = (
-                            f"Hola {alumno_nombre},\n\n"
-                            f"Adjunto encontrarás tu reporte de asistencias {periodo_txt}.\n\n"
-                            "Saludos."
-                        )
-                        send_mail(
-                            subject=f"Reporte de asistencias — {alumno_nombre} — {periodo_txt}",
-                            body=cuerpo_alumno,
-                            to_list=[correo_alumno],
-                            attachments=[pdf_path]
-                        )
-                        enviados += 1
+                try:
+                    for meta in metas:
+                        correo_alumno = (meta.get("email") or "").strip()
+                        if not correo_alumno:
+                            sin_correo += 1
+                            continue
 
-                        # ----- Correo al ASESOR (si hay) -----
-                        if asesor_email:
-                            saludo = f"Hola {asesor_nombre}," if asesor_nombre else "Hola,"
-                            cuerpo_asesor = (
-                                f"{saludo}\n\n"
-                                f"Adjunto el reporte mensual de asistencias del alumno "
-                                f"{alumno_nombre} ({alumno_matricula}) correspondiente a {periodo_txt}.\n\n"
-                                "Quedo atento(a) a cualquier comentario.\n\nSaludos."
+                        try:
+                            # Genera PDF individual en carpeta temporal
+                            pdf_path = self._generar_pdf_alumno(meta, carpeta_salida=tmpdir)
+
+                            periodo_txt = _texto_periodo_local(meta)
+                            alumno_nombre = meta.get("nombre", "")
+                            alumno_matricula = str(meta.get("matricula", "") or "")
+                            asesor_email = (meta.get("asesor_email") or "").strip()
+                            asesor_nombre = (meta.get("asesor") or "").strip()
+
+                            # ----- Correo al ALUMNO -----
+                            cuerpo_alumno = (
+                                f"Hola {alumno_nombre},\n\n"
+                                f"Adjunto encontrarás tu reporte de asistencias {periodo_txt}.\n\n"
+                                "Saludos."
                             )
                             send_mail(
-                                subject=f"Reporte del alumno {alumno_nombre} — {periodo_txt}",
-                                body=cuerpo_asesor,
-                                to_list=[asesor_email],
+                                subject=f"Reporte de asistencias — {alumno_nombre} — {periodo_txt}",
+                                body=cuerpo_alumno,
+                                to_list=[correo_alumno],
                                 attachments=[pdf_path]
                             )
+                            enviados += 1
 
-                        # Pausa corta para evitar throttling del servidor SMTP
-                        time.sleep(0.4)
+                            # ----- Correo al ASESOR (si hay) -----
+                            if asesor_email:
+                                saludo = f"Hola {asesor_nombre}," if asesor_nombre else "Hola,"
+                                cuerpo_asesor = (
+                                    f"{saludo}\n\n"
+                                    f"Adjunto el reporte mensual de asistencias del alumno "
+                                    f"{alumno_nombre} ({alumno_matricula}) correspondiente a {periodo_txt}.\n\n"
+                                    "Quedo atento(a) a cualquier comentario.\n\nSaludos."
+                                )
+                                send_mail(
+                                    subject=f"Reporte del alumno {alumno_nombre} — {periodo_txt}",
+                                    body=cuerpo_asesor,
+                                    to_list=[asesor_email],
+                                    attachments=[pdf_path]
+                                )
 
-                    except Exception as e:
-                        errores += 1
-                        messagebox.showerror("Error de envío", f"Alumno: {correo_alumno}\n\n{e}")
+                            # Pausa corta para evitar throttling del servidor SMTP
+                            time.sleep(0.4)
 
-            finally:
-                # Limpieza de temporales
-                try:
-                    shutil.rmtree(tmpdir, ignore_errors=True)
-                except Exception:
-                    pass
+                        except Exception as e:
+                            errores += 1
+                            errores_detalle.append(f"{correo_alumno}: {e}")
 
-            messagebox.showinfo(
-                "Envío de reportes",
-                f"Enviados: {enviados}\nSin correo: {sin_correo}\nErrores: {errores}"
-            )
-  
+                finally:
+                    # Limpieza de temporales
+                    try:
+                        shutil.rmtree(tmpdir, ignore_errors=True)
+                    except Exception:
+                        pass
+
+                # Mostrar resumen en el hilo principal
+                def mostrar_resumen():
+                    msg = f"Enviados: {enviados}\nSin correo: {sin_correo}\nErrores: {errores}"
+                    if errores_detalle:
+                        msg += "\n\nDetalles de errores:\n" + "\n".join(errores_detalle[:5])
+                        if len(errores_detalle) > 5:
+                            msg += f"\n(+ {len(errores_detalle) - 5} más...)"
+                    messagebox.showinfo("Envío de reportes", msg)
+
+                    # Si quieres cerrar la ventana 'top' al terminar:
+                    try:
+                        if top is not None and top.winfo_exists():
+                            top.destroy()
+                    except Exception:
+                        pass
+
+                self.ventana.after(0, mostrar_resumen)
+
+            except Exception as e:
+                # Cualquier fallo inesperado lo reportamos también en el hilo principal
+                def mostrar_error_final():
+                    messagebox.showerror("Error", f"Ocurrió un error durante el envío de correos:\n{e}")
+                self.ventana.after(0, mostrar_error_final)
+
+        # Lanzar el hilo en segundo plano
+        threading.Thread(target=worker, daemon=True).start()
+
     def _exportar_pdf_usuario(self):
         self.exportar_reporte_usuario(formato="pdf")
 
