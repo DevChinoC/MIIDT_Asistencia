@@ -1,7 +1,7 @@
 from datetime import datetime
 from sqlite3 import IntegrityError
 from typing import List, Dict, Optional, Union
-
+from datetime import datetime, timedelta   # arriba del archivo, si aún no lo tienes
 class Modelo:
     def __init__(self, db):
         self.db = db
@@ -260,7 +260,7 @@ class Modelo:
             self.db.rollback()
             return False
     
-    from datetime import datetime, timedelta   # arriba del archivo, si aún no lo tienes
+    
 
     def obtener_ultima_asistencia_hoy(self, estudiante_id):
         """
@@ -313,6 +313,63 @@ class Modelo:
             return asistencias
         except Exception as e:
             print(f"Error al obtener asistencias: {e}")
+            return []
+
+    def obtener_asistencias_hoy_completo(self):
+        """
+        Obtiene las asistencias de hoy con formato de diccionario para reportes.
+        Devuelve: [{nombre, fecha, hora_entrada, hora_salida, horas_presentes}, ...]
+        """
+        try:
+            hoy = datetime.now().astimezone().strftime("%Y-%m-%d")
+            
+            self.cursor.execute("""
+                SELECT 
+                    a.nombre, a.apellido_paterno, a.apellido_materno,
+                    r.asistencia, r.hora_entrada, r.hora_salida,
+                    CASE
+                        WHEN r.hora_entrada IS NOT NULL AND r.hora_salida IS NOT NULL
+                        THEN TIME_TO_SEC(TIMEDIFF(r.hora_salida, r.hora_entrada)) / 3600.0
+                        ELSE 0
+                    END AS horas_presentes
+                FROM registro_asistencias r
+                JOIN alumnos a ON r.alumno_id = a.id
+                WHERE r.asistencia = %s
+                ORDER BY a.apellido_paterno, a.apellido_materno, a.nombre
+            """, (hoy,))
+            
+            rows = self.cursor.fetchall()
+            resultado = []
+            
+            for row in rows:
+                nombre_completo = f"{row[0]} {row[1]} {row[2]}".strip()
+                fecha = row[3]
+                hora_entrada = row[4]
+                hora_salida = row[5]
+                horas_val = float(row[6]) if row[6] else 0.0
+                
+                # Formateo
+                fecha_str = str(fecha)
+                hora_ent_str = str(hora_entrada) if hora_entrada else "--:--"
+                hora_sal_str = str(hora_salida) if hora_salida else "--:--"
+                
+                # Topar a 8 horas (regla de negocio vista en obtener_estadisticas_estudiante)
+                if horas_val > 8.0:
+                    horas_val = 8.0
+                
+                resultado.append({
+                    "nombre": nombre_completo,
+                    "fecha": fecha_str,
+                    "hora_entrada": hora_ent_str,
+                    "hora_salida": hora_sal_str,
+                    "horas_presentes": f"{horas_val:.2f}"
+                })
+                
+            return resultado
+        except Exception as e:
+            print(f"Error al obtener asistencias completas de hoy: {e}")
+            import traceback
+            traceback.print_exc()
             return []
             
     def registrar_salida(self, registro_id):
@@ -605,6 +662,7 @@ class Modelo:
             }
 
 
+
     # ===== CATALOGO: GENERACIONES =====
     def obtener_generaciones(self) -> List[Dict[str, Union[int, str]]]:
         try:
@@ -759,11 +817,15 @@ class Modelo:
             return False
  
 
-    def obtener_estudiantes_por_generacion(self, generacion_id: int):
+    def obtener_estudiantes_por_generacion(self, nombre_generacion: str):
         """
-        Devuelve [(id, email, matricula, nombre, ape_p, ape_m, generacion, asesor, area, carrera, asesor_email), ...]
-        filtrando por el ID de generación (alumnos.generacion_id).
-        Toma el correo del asesor directamente desde la tabla teachers.
+        Devuelve [(id, email, matricula, nombre, ape_p, ape_m, generacion,
+                asesor, area, carrera, asesor_email), ...]
+        filtrando por el NOMBRE de la generación (ej. 'GTU2025').
+
+        Soporta:
+        - esquema actual: alumnos.generacion (VARCHAR) - campo directo
+        - esquema futuro: alumnos.generacion_id + tabla generaciones (si se migra)
         """
         try:
             query = """
@@ -774,23 +836,22 @@ class Modelo:
                     a.nombre, 
                     a.apellido_paterno, 
                     a.apellido_materno,
-                    g.nombre AS generacion, 
+                    a.generacion AS generacion, 
                     a.asesor, 
-                    COALESCE(ar.nombre, a.area_conocimiento) AS area_conocimiento,
-                    COALESCE(c.nombre, a.carrera) AS carrera,
+                    a.area_conocimiento AS area_conocimiento,
+                    a.carrera AS carrera,
                     t.email AS asesor_email
                 FROM alumnos a
-                JOIN generaciones g ON g.id = a.generacion_id
                 LEFT JOIN teachers t ON t.id = a.asesor_id
-                LEFT JOIN areas_conocimiento ar ON ar.id = a.area_id
-                LEFT JOIN carreras c ON c.id = a.carrera_id
-                WHERE a.generacion_id = %s
+                WHERE a.generacion = %s
                 ORDER BY a.apellido_paterno, a.apellido_materno, a.nombre;
             """
-            self.cursor.execute(query, (generacion_id,))
+            self.cursor.execute(query, (nombre_generacion,))
             return self.cursor.fetchall()
         except Exception as e:
-            print(f"Error al obtener estudiantes por generación: {e}")
+            print("Error al obtener estudiantes por generación:", e)
+            import traceback
+            traceback.print_exc()
             return []
 
    

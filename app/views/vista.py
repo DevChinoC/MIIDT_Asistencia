@@ -21,6 +21,10 @@ from openpyxl import Workbook
 from openpyxl.utils.dataframe import dataframe_to_rows
 import tempfile, os, shutil
 import os, unicodedata, re
+from datetime import datetime
+import locale
+import traceback
+
 
 try:
     from config.email import send_mail   # util para enviar email
@@ -879,13 +883,13 @@ class VentanaPrincipal:
             bg='#f3f4f6', pady=15
         ).grid(row=0, column=0, sticky="ew", padx=20)
 
-        # Form scroll
+        # Canvas + frame scrollable
         canvas = tk.Canvas(modal, bg='#f3f4f6', highlightthickness=0)
         scrollable_frame = tk.Frame(canvas, bg='#f3f4f6', padx=20, pady=5)
         canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
         canvas.grid(row=1, column=0, sticky="nsew")
 
-        # Vars
+        # Variables
         vars_data = {
             'nombre': tk.StringVar(value=estudiante.get('nombre', '')),
             'apellido_p': tk.StringVar(value=estudiante.get('apellido_p', '')),
@@ -895,86 +899,109 @@ class VentanaPrincipal:
             'generacion': tk.StringVar(value=estudiante.get('generacion', '')),
             'asesor': tk.StringVar(value=estudiante.get('asesor', '')),
             'area_conocimiento': tk.StringVar(value=estudiante.get('area_conocimiento', '')),
-            'carrera': tk.StringVar(value=estudiante.get('carrera', ''))
+            'carrera': tk.StringVar(value=estudiante.get('carrera', '')),
         }
         huella_digital = estudiante.get('huella_digital', '')
 
-        # Helper campo
-        def crear_campo_compacto(parent, label, var, row, colspan=1, widget_type='entry', options=None):
-            frame = tk.Frame(parent, bg='#f3f4f6')
-            frame.grid(row=row, column=0, sticky="ew", pady=3, columnspan=colspan)
+        # ================= FORMULARIO ALINEADO (4 columnas) =================
+        form_frame = tk.Frame(scrollable_frame, bg='#f3f4f6')
+        form_frame.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 10))
 
-            tk.Label(
-                frame, text=label, bg='#f3f4f6', font=('Arial', 10, 'bold'), anchor='w'
-            ).pack(side="left", padx=(0, 5), pady=5)
+        # Columna 1
+        tk.Label(form_frame, text="Nombre(s):", bg='#f3f4f6',
+                font=('Arial', 10, 'bold')).grid(row=0, column=0, sticky="e", padx=5, pady=5)
+        entry_nombre = tk.Entry(form_frame, textvariable=vars_data['nombre'],
+                                font=('Arial', 10), relief='solid', bd=1, bg='white', width=28)
+        entry_nombre.grid(row=0, column=1, padx=5, pady=5, sticky="w")
 
-            if widget_type == 'entry':
-                entry = tk.Entry(
-                    frame, textvariable=var, font=('Arial', 10),
-                    relief='solid', bd=1, bg='white', width=15
-                )
-                entry.pack(side="left", fill="x", expand=True, pady=5)
-                return entry
-            elif widget_type == 'combobox':
-                combo = ttk.Combobox(
-                    frame, textvariable=var, font=('Arial', 10),
-                    values=options or [], width=30
-                )
-                combo.pack(side="left", fill="x", expand=True, pady=5)
-                return combo
+        tk.Label(form_frame, text="Apellido Paterno:", bg='#f3f4f6',
+                font=('Arial', 10, 'bold')).grid(row=1, column=0, sticky="e", padx=5, pady=5)
+        entry_apellido_p = tk.Entry(form_frame, textvariable=vars_data['apellido_p'],
+                                    font=('Arial', 10), relief='solid', bd=1, bg='white', width=28)
+        entry_apellido_p.grid(row=1, column=1, padx=5, pady=5, sticky="w")
 
-        # Dos columnas
-        left_col = tk.Frame(scrollable_frame, bg='#f3f4f6')
-        left_col.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        tk.Label(form_frame, text="Apellido Materno:", bg='#f3f4f6',
+                font=('Arial', 10, 'bold')).grid(row=2, column=0, sticky="e", padx=5, pady=5)
+        entry_apellido_m = tk.Entry(form_frame, textvariable=vars_data['apellido_m'],
+                                    font=('Arial', 10), relief='solid', bd=1, bg='white', width=28)
+        entry_apellido_m.grid(row=2, column=1, padx=5, pady=5, sticky="w")
 
-        right_col = tk.Frame(scrollable_frame, bg='#f3f4f6')
-        right_col.grid(row=0, column=1, sticky="nsew")
+        tk.Label(form_frame, text="Matrícula:", bg='#f3f4f6',
+                font=('Arial', 10, 'bold')).grid(row=3, column=0, sticky="e", padx=5, pady=5)
+        entry_matricula = tk.Entry(form_frame, textvariable=vars_data['matricula'],
+                                font=('Arial', 10), relief='solid', bd=1, bg='white', width=28)
+        entry_matricula.grid(row=3, column=1, padx=5, pady=5, sticky="w")
 
-        # Izquierda
-        crear_campo_compacto(left_col, "Nombre(s):", vars_data['nombre'], 0)
-        crear_campo_compacto(left_col, "Apellido Paterno:", vars_data['apellido_p'], 1)
-        crear_campo_compacto(left_col, "Apellido Materno:", vars_data['apellido_m'], 2)
-        crear_campo_compacto(left_col, "Matrícula:", vars_data['matricula'], 3)
-        crear_campo_compacto(left_col, "Correo:", vars_data['email'], 4)
+        tk.Label(form_frame, text="Correo:", bg='#f3f4f6',
+                font=('Arial', 10, 'bold')).grid(row=4, column=0, sticky="e", padx=5, pady=5)
+        entry_correo = tk.Entry(form_frame, textvariable=vars_data['email'],
+                                font=('Arial', 10), relief='solid', bd=1, bg='white', width=28)
+        entry_correo.grid(row=4, column=1, padx=5, pady=5, sticky="w")
 
-        # Derecha
+        # Columna 2
+        tk.Label(form_frame, text="Generación:", bg='#f3f4f6',
+                font=('Arial', 10, 'bold')).grid(row=0, column=2, sticky="e", padx=5, pady=5)
         generaciones = self.controlador.obtener_generaciones()
-        crear_campo_compacto(
-            right_col, "Generación:", vars_data['generacion'], 0,
-            widget_type='combobox', options=[g['nombre'] for g in generaciones]
+        combo_generacion = ttk.Combobox(
+            form_frame,
+            textvariable=vars_data['generacion'],
+            font=('Arial', 10),
+            values=[g['nombre'] for g in generaciones],
+            width=26,
+            state="readonly"
         )
+        combo_generacion.grid(row=0, column=3, padx=5, pady=5, sticky="w")
 
+        tk.Label(form_frame, text="Asesor:", bg='#f3f4f6',
+                font=('Arial', 10, 'bold')).grid(row=1, column=2, sticky="e", padx=5, pady=5)
         asesores = self.controlador.obtener_asesores()
-        crear_campo_compacto(
-            right_col, "Asesor:", vars_data['asesor'], 1,
-            widget_type='combobox', options=[a['name'] for a in asesores]
+        combo_asesor = ttk.Combobox(
+            form_frame,
+            textvariable=vars_data['asesor'],
+            font=('Arial', 10),
+            values=[a['name'] for a in asesores],
+            width=26,
+            state="readonly"
         )
-        # mapa nombre->id
+        combo_asesor.grid(row=1, column=3, padx=5, pady=5, sticky="w")
         self.asesores_data = {a['name']: a['id'] for a in asesores}
 
-        # NUEVO: correo del asesor (debajo del Asesor)
-        #crear_campo_compacto(right_col, "Correo del asesor:", vars_data['asesor_email'], 2)
-
+        tk.Label(form_frame, text="Área:", bg='#f3f4f6',
+                font=('Arial', 10, 'bold')).grid(row=2, column=2, sticky="e", padx=5, pady=5)
         areas = self.controlador.obtener_areas_conocimiento()
-        crear_campo_compacto(
-            right_col, "Área:", vars_data['area_conocimiento'], 3,
-            widget_type='combobox', options=[ar['nombre'] for ar in areas]
+        combo_area = ttk.Combobox(
+            form_frame,
+            textvariable=vars_data['area_conocimiento'],
+            font=('Arial', 10),
+            values=[ar['nombre'] for ar in areas],
+            width=26,
+            state="readonly"
         )
-        crear_campo_compacto(right_col, "Carrera:", vars_data['carrera'], 4)
+        combo_area.grid(row=2, column=3, padx=5, pady=5, sticky="w")
 
-        # Pesos
+        tk.Label(form_frame, text="Carrera:", bg='#f3f4f6',
+                font=('Arial', 10, 'bold')).grid(row=3, column=2, sticky="e", padx=5, pady=5)
+        entry_carrera = tk.Entry(form_frame, textvariable=vars_data['carrera'],
+                                font=('Arial', 10), relief='solid', bd=1, bg='white', width=28)
+        entry_carrera.grid(row=3, column=3, padx=5, pady=5, sticky="w")
+
+        # Opcional: que las columnas se vean bien distribuidas
+        for col in range(4):
+            form_frame.grid_columnconfigure(col, weight=1)
+
+        # ======================= SECCIÓN HUELLA =======================
         scrollable_frame.columnconfigure(0, weight=1)
         scrollable_frame.columnconfigure(1, weight=1)
 
-        # Huella
         frame_huella = tk.LabelFrame(
             scrollable_frame, text=" Lector de Huella Dactilar ",
             bg='#f3f4f6', font=('Arial', 9, 'bold'),
             padx=10, pady=5, relief="groove"
         )
-        frame_huella.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(10, 5))
+        frame_huella.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(10, 5))
 
-        tk.Label(frame_huella, text="Inicialice el lector:", bg='#f3f4f6', font=('Arial', 9)).pack(pady=(0, 5))
+        tk.Label(frame_huella, text="Inicialice el lector:", bg='#f3f4f6',
+                font=('Arial', 9)).pack(pady=(0, 5))
 
         icono_huella = None
         try:
@@ -1008,7 +1035,7 @@ class VentanaPrincipal:
 
         btn_escanear.config(command=lambda: self.interface_api.register_fingerprint(on_enroll=on_enroll))
 
-        # Guardar
+        # ======================= GUARDAR / CANCELAR =======================
         def guardar_cambios():
             try:
                 ok = self.controlador.editar_estudiante(
@@ -1034,7 +1061,6 @@ class VentanaPrincipal:
             except Exception as e:
                 messagebox.showerror("Error", f"Error: {str(e)}")
 
-        # Botones
         btn_frame = tk.Frame(modal, bg='#f3f4f6', pady=10)
         btn_frame.grid(row=2, column=0, columnspan=2, sticky="ew")
 
@@ -1054,6 +1080,7 @@ class VentanaPrincipal:
             canvas.itemconfig("all", width=event.width)
 
         canvas.bind("<Configure>", _on_canvas_configure)
+
 
 
     def _confirmar_eliminar_estudiante(self, estudiante):
@@ -2330,6 +2357,8 @@ class VentanaPrincipal:
         except Exception as e:
             print(f"Error al obtener estadísticas: {e}")
             traceback.print_exc()
+
+
     
     def _crear_tarjeta_estadistica(self, parent, titulo, valor, color):
         """Crea una tarjeta de estadística"""
@@ -2491,19 +2520,18 @@ class VentanaPrincipal:
 
 
     def _cargar_tabla_generacion(self, top):
-        """Rellena la tabla por generación usando generacion_id y respetando el filtro de mes/año o rango."""
+        """Rellena la tabla por generación usando el nombre de la generación y respetando el filtro de mes/año o rango."""
         if not hasattr(self, "_tv_gen"):
             return
 
-        # 1) Obtener el nombre seleccionado y resolver su ID
+        # 1) Obtener el nombre seleccionado
         gen_nombre = (self._combo_gen.get() or "").strip()
-        gen_id = (getattr(self, "_map_gen_name_to_id", {}) or {}).get(gen_nombre)
-        if not gen_id:
-            messagebox.showwarning("Aviso", "No se pudo resolver el ID de la generación seleccionada.")
+        if not gen_nombre:
+            messagebox.showwarning("Aviso", "Selecciona una generación válida.")
             return
 
-        # 2) Consultar filas por generacion_id (el modelo ya hace JOIN a generaciones/teachers)
-        rows = self.controlador.obtener_estudiantes_por_generacion(gen_id) or []
+        # 2) Consultar filas por nombre de generación (el modelo filtra por a.generacion)
+        rows = self.controlador.obtener_estudiantes_por_generacion(gen_nombre) or []
 
         # 3) Limpiar la tabla
         for r in self._tv_gen.get_children():
@@ -2988,7 +3016,7 @@ class VentanaPrincipal:
         line_h = 7
 
         left_x = 15
-        right_x = 105      # más a la izquierda para mayor espacio
+        right_x = 120      # más a la izquierda para mayor espacio
         margin_r = 15
 
         left_w = right_x - left_x - 5
@@ -2998,7 +3026,7 @@ class VentanaPrincipal:
 
         # 1️⃣ Alumno / Matrícula
         pdf.set_xy(left_x, y)
-        pdf.cell(left_w, line_h, f"Alumno: {nombre_alumno}", ln=0)
+        pdf.cell(left_w, line_h, f"Estudiante: {nombre_alumno}", ln=0)
 
         pdf.set_xy(right_x, y)
         pdf.multi_cell(right_w, line_h, f"Matrícula: {matricula}")
