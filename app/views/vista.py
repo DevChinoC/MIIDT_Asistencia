@@ -1,4 +1,6 @@
 import os
+import re
+import unicodedata
 from tkinter import simpledialog
 from dotenv import load_dotenv
 import bcrypt
@@ -7,6 +9,8 @@ from tkinter import ttk, messagebox, filedialog
 from PIL import Image, ImageTk
 import pandas as pd
 from fpdf import FPDF
+from pdf2image import convert_from_path
+from PIL import Image
 from fpdf.enums import AccessPermission  
 import traceback, openpyxl, threading, locale
 from openpyxl.utils import get_column_letter
@@ -15,9 +19,12 @@ from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
 from datetime import datetime
 from openpyxl import Workbook
 from openpyxl.utils.dataframe import dataframe_to_rows
-from config.email import send_mail
 import tempfile, os, shutil
 import os, unicodedata, re
+from datetime import datetime
+import locale
+import traceback
+
 
 try:
     from config.email import send_mail   # util para enviar email
@@ -876,13 +883,13 @@ class VentanaPrincipal:
             bg='#f3f4f6', pady=15
         ).grid(row=0, column=0, sticky="ew", padx=20)
 
-        # Form scroll
+        # Canvas + frame scrollable
         canvas = tk.Canvas(modal, bg='#f3f4f6', highlightthickness=0)
         scrollable_frame = tk.Frame(canvas, bg='#f3f4f6', padx=20, pady=5)
         canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
         canvas.grid(row=1, column=0, sticky="nsew")
 
-        # Vars
+        # Variables
         vars_data = {
             'nombre': tk.StringVar(value=estudiante.get('nombre', '')),
             'apellido_p': tk.StringVar(value=estudiante.get('apellido_p', '')),
@@ -892,86 +899,109 @@ class VentanaPrincipal:
             'generacion': tk.StringVar(value=estudiante.get('generacion', '')),
             'asesor': tk.StringVar(value=estudiante.get('asesor', '')),
             'area_conocimiento': tk.StringVar(value=estudiante.get('area_conocimiento', '')),
-            'carrera': tk.StringVar(value=estudiante.get('carrera', ''))
+            'carrera': tk.StringVar(value=estudiante.get('carrera', '')),
         }
         huella_digital = estudiante.get('huella_digital', '')
 
-        # Helper campo
-        def crear_campo_compacto(parent, label, var, row, colspan=1, widget_type='entry', options=None):
-            frame = tk.Frame(parent, bg='#f3f4f6')
-            frame.grid(row=row, column=0, sticky="ew", pady=3, columnspan=colspan)
+        # ================= FORMULARIO ALINEADO (4 columnas) =================
+        form_frame = tk.Frame(scrollable_frame, bg='#f3f4f6')
+        form_frame.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 10))
 
-            tk.Label(
-                frame, text=label, bg='#f3f4f6', font=('Arial', 10, 'bold'), anchor='w'
-            ).pack(side="left", padx=(0, 5), pady=5)
+        # Columna 1
+        tk.Label(form_frame, text="Nombre(s):", bg='#f3f4f6',
+                font=('Arial', 10, 'bold')).grid(row=0, column=0, sticky="e", padx=5, pady=5)
+        entry_nombre = tk.Entry(form_frame, textvariable=vars_data['nombre'],
+                                font=('Arial', 10), relief='solid', bd=1, bg='white', width=28)
+        entry_nombre.grid(row=0, column=1, padx=5, pady=5, sticky="w")
 
-            if widget_type == 'entry':
-                entry = tk.Entry(
-                    frame, textvariable=var, font=('Arial', 10),
-                    relief='solid', bd=1, bg='white', width=15
-                )
-                entry.pack(side="left", fill="x", expand=True, pady=5)
-                return entry
-            elif widget_type == 'combobox':
-                combo = ttk.Combobox(
-                    frame, textvariable=var, font=('Arial', 10),
-                    values=options or [], width=30
-                )
-                combo.pack(side="left", fill="x", expand=True, pady=5)
-                return combo
+        tk.Label(form_frame, text="Apellido Paterno:", bg='#f3f4f6',
+                font=('Arial', 10, 'bold')).grid(row=1, column=0, sticky="e", padx=5, pady=5)
+        entry_apellido_p = tk.Entry(form_frame, textvariable=vars_data['apellido_p'],
+                                    font=('Arial', 10), relief='solid', bd=1, bg='white', width=28)
+        entry_apellido_p.grid(row=1, column=1, padx=5, pady=5, sticky="w")
 
-        # Dos columnas
-        left_col = tk.Frame(scrollable_frame, bg='#f3f4f6')
-        left_col.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        tk.Label(form_frame, text="Apellido Materno:", bg='#f3f4f6',
+                font=('Arial', 10, 'bold')).grid(row=2, column=0, sticky="e", padx=5, pady=5)
+        entry_apellido_m = tk.Entry(form_frame, textvariable=vars_data['apellido_m'],
+                                    font=('Arial', 10), relief='solid', bd=1, bg='white', width=28)
+        entry_apellido_m.grid(row=2, column=1, padx=5, pady=5, sticky="w")
 
-        right_col = tk.Frame(scrollable_frame, bg='#f3f4f6')
-        right_col.grid(row=0, column=1, sticky="nsew")
+        tk.Label(form_frame, text="Matrícula:", bg='#f3f4f6',
+                font=('Arial', 10, 'bold')).grid(row=3, column=0, sticky="e", padx=5, pady=5)
+        entry_matricula = tk.Entry(form_frame, textvariable=vars_data['matricula'],
+                                font=('Arial', 10), relief='solid', bd=1, bg='white', width=28)
+        entry_matricula.grid(row=3, column=1, padx=5, pady=5, sticky="w")
 
-        # Izquierda
-        crear_campo_compacto(left_col, "Nombre(s):", vars_data['nombre'], 0)
-        crear_campo_compacto(left_col, "Apellido Paterno:", vars_data['apellido_p'], 1)
-        crear_campo_compacto(left_col, "Apellido Materno:", vars_data['apellido_m'], 2)
-        crear_campo_compacto(left_col, "Matrícula:", vars_data['matricula'], 3)
-        crear_campo_compacto(left_col, "Correo:", vars_data['email'], 4)
+        tk.Label(form_frame, text="Correo:", bg='#f3f4f6',
+                font=('Arial', 10, 'bold')).grid(row=4, column=0, sticky="e", padx=5, pady=5)
+        entry_correo = tk.Entry(form_frame, textvariable=vars_data['email'],
+                                font=('Arial', 10), relief='solid', bd=1, bg='white', width=28)
+        entry_correo.grid(row=4, column=1, padx=5, pady=5, sticky="w")
 
-        # Derecha
+        # Columna 2
+        tk.Label(form_frame, text="Generación:", bg='#f3f4f6',
+                font=('Arial', 10, 'bold')).grid(row=0, column=2, sticky="e", padx=5, pady=5)
         generaciones = self.controlador.obtener_generaciones()
-        crear_campo_compacto(
-            right_col, "Generación:", vars_data['generacion'], 0,
-            widget_type='combobox', options=[g['nombre'] for g in generaciones]
+        combo_generacion = ttk.Combobox(
+            form_frame,
+            textvariable=vars_data['generacion'],
+            font=('Arial', 10),
+            values=[g['nombre'] for g in generaciones],
+            width=26,
+            state="readonly"
         )
+        combo_generacion.grid(row=0, column=3, padx=5, pady=5, sticky="w")
 
+        tk.Label(form_frame, text="Asesor:", bg='#f3f4f6',
+                font=('Arial', 10, 'bold')).grid(row=1, column=2, sticky="e", padx=5, pady=5)
         asesores = self.controlador.obtener_asesores()
-        crear_campo_compacto(
-            right_col, "Asesor:", vars_data['asesor'], 1,
-            widget_type='combobox', options=[a['name'] for a in asesores]
+        combo_asesor = ttk.Combobox(
+            form_frame,
+            textvariable=vars_data['asesor'],
+            font=('Arial', 10),
+            values=[a['name'] for a in asesores],
+            width=26,
+            state="readonly"
         )
-        # mapa nombre->id
+        combo_asesor.grid(row=1, column=3, padx=5, pady=5, sticky="w")
         self.asesores_data = {a['name']: a['id'] for a in asesores}
 
-        # NUEVO: correo del asesor (debajo del Asesor)
-        #crear_campo_compacto(right_col, "Correo del asesor:", vars_data['asesor_email'], 2)
-
+        tk.Label(form_frame, text="Área:", bg='#f3f4f6',
+                font=('Arial', 10, 'bold')).grid(row=2, column=2, sticky="e", padx=5, pady=5)
         areas = self.controlador.obtener_areas_conocimiento()
-        crear_campo_compacto(
-            right_col, "Área:", vars_data['area_conocimiento'], 3,
-            widget_type='combobox', options=[ar['nombre'] for ar in areas]
+        combo_area = ttk.Combobox(
+            form_frame,
+            textvariable=vars_data['area_conocimiento'],
+            font=('Arial', 10),
+            values=[ar['nombre'] for ar in areas],
+            width=26,
+            state="readonly"
         )
-        crear_campo_compacto(right_col, "Carrera:", vars_data['carrera'], 4)
+        combo_area.grid(row=2, column=3, padx=5, pady=5, sticky="w")
 
-        # Pesos
+        tk.Label(form_frame, text="Carrera:", bg='#f3f4f6',
+                font=('Arial', 10, 'bold')).grid(row=3, column=2, sticky="e", padx=5, pady=5)
+        entry_carrera = tk.Entry(form_frame, textvariable=vars_data['carrera'],
+                                font=('Arial', 10), relief='solid', bd=1, bg='white', width=28)
+        entry_carrera.grid(row=3, column=3, padx=5, pady=5, sticky="w")
+
+        # Opcional: que las columnas se vean bien distribuidas
+        for col in range(4):
+            form_frame.grid_columnconfigure(col, weight=1)
+
+        # ======================= SECCIÓN HUELLA =======================
         scrollable_frame.columnconfigure(0, weight=1)
         scrollable_frame.columnconfigure(1, weight=1)
 
-        # Huella
         frame_huella = tk.LabelFrame(
             scrollable_frame, text=" Lector de Huella Dactilar ",
             bg='#f3f4f6', font=('Arial', 9, 'bold'),
             padx=10, pady=5, relief="groove"
         )
-        frame_huella.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(10, 5))
+        frame_huella.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(10, 5))
 
-        tk.Label(frame_huella, text="Inicialice el lector:", bg='#f3f4f6', font=('Arial', 9)).pack(pady=(0, 5))
+        tk.Label(frame_huella, text="Inicialice el lector:", bg='#f3f4f6',
+                font=('Arial', 9)).pack(pady=(0, 5))
 
         icono_huella = None
         try:
@@ -1005,7 +1035,7 @@ class VentanaPrincipal:
 
         btn_escanear.config(command=lambda: self.interface_api.register_fingerprint(on_enroll=on_enroll))
 
-        # Guardar
+        # ======================= GUARDAR / CANCELAR =======================
         def guardar_cambios():
             try:
                 ok = self.controlador.editar_estudiante(
@@ -1031,7 +1061,6 @@ class VentanaPrincipal:
             except Exception as e:
                 messagebox.showerror("Error", f"Error: {str(e)}")
 
-        # Botones
         btn_frame = tk.Frame(modal, bg='#f3f4f6', pady=10)
         btn_frame.grid(row=2, column=0, columnspan=2, sticky="ew")
 
@@ -1051,6 +1080,7 @@ class VentanaPrincipal:
             canvas.itemconfig("all", width=event.width)
 
         canvas.bind("<Configure>", _on_canvas_configure)
+
 
 
     def _confirmar_eliminar_estudiante(self, estudiante):
@@ -1339,51 +1369,105 @@ class VentanaPrincipal:
 
         # Método para manejar el resultado de la verificación
         def manejar_verificacion_huella():
-            # Obtener todos los estudiantes con sus huellas
-            estudiantes_tuples = self.controlador.obtener_estudiantes_para_asistencia(mostrar_en_vista=False)
-            
-            if not estudiantes_tuples:
-                messagebox.showwarning("Advertencia", "No hay estudiantes registrados en el sistema.")
-                return
-            
-            # Convertir la lista de tuplas a lista de diccionarios y filtrar solo los que tienen huella
-            estudiantes_con_huella = []
-            for est in estudiantes_tuples:
-                if len(est) > 4 and est[4]:  # Verificar que existe huella_digital y no es None
-                    estudiante = {
-                        'id': est[0],
-                        'nombre': est[1],
-                        'apellido_p': est[2] if len(est) > 2 else '',
-                        'apellido_m': est[3] if len(est) > 3 else '',
-                        'huella_digital': est[4]
-                    }
-                    estudiantes_con_huella.append(estudiante)
-            
-            if not estudiantes_con_huella:
-                messagebox.showwarning("Advertencia", "No hay estudiantes con huellas registradas en el sistema.")
-                return
-            
-            # Buscar coincidencia con alguna huella registrada
-            estudiante_encontrado = self.interface_api.verify_fingerprint(estudiantes_con_huella)
-            
-            if estudiante_encontrado:
-                # Verificar si ya tiene una asistencia registrada hoy
-                if self.controlador.verificar_asistencia_existente(estudiante_encontrado['id']):
-                    messagebox.showinfo("Información", 
-                        f"{estudiante_encontrado['nombre']} {estudiante_encontrado['apellido_p']} ya tiene una asistencia registrada hoy.")
-                    self._actualizar_asistencias_hoy()
+            try:
+                # 1) Obtener estudiantes con huella desde el controlador
+                estudiantes = self.controlador.obtener_estudiantes_para_asistencia()
+                if not estudiantes:
+                    messagebox.showwarning("Advertencia", "No hay estudiantes con huella registrada.")
                     return
-                    
-                # Registrar la asistencia
-                if self.controlador.registrar_asistencia(estudiante_encontrado['id']):
-                    messagebox.showinfo("Éxito", 
-                        f"Bienvenido/a {estudiante_encontrado['nombre']} {estudiante_encontrado['apellido_p']}")
-                    self._actualizar_asistencias_hoy()
+
+                # 2) Verificar huella usando la interfaz biométrica
+                matching_student = self.interface_api.verify_fingerprint(estudiantes)
+
+                if not matching_student:
+                    self.mostrar_notificacion_rapida(
+                        "Huella no reconocida",
+                        color_fondo="#dc2626"
+                    )
+                    return
+
+                estudiante = matching_student
+                estudiante_id = estudiante["id"]
+
+                # 3) Ver qué tiene hoy el estudiante
+                ultima = self.controlador.modelo.obtener_ultima_asistencia_hoy(estudiante_id)
+
+                from datetime import datetime, timedelta, time
+                ahora = datetime.now()
+
+                #
+                # === CASO A: NO TIENE ENTRADA HOY ===
+                #
+                if not ultima or not ultima.get("hora_entrada"):
+                    if self.controlador.verificar_asistencia_existente(estudiante_id):
+                        self.mostrar_notificacion_rapida(
+                            "Ya registraste tu asistencia hoy.",
+                            color_fondo="#f97316"
+                        )
+                        return
+
+                    if self.controlador.registrar_asistencia(estudiante_id):
+                        self._actualizar_asistencias_hoy()
+                        self.mostrar_notificacion_rapida("Ingreso exitoso", "#16a34a")
+                    else:
+                        self.mostrar_notificacion_rapida("Error al registrar ingreso", "#dc2626")
+                    return
+
+                #
+                # === CASO B: YA TIENE ENTRADA Y SALIDA ===
+                #
+                if ultima.get("hora_salida"):
+                    self.mostrar_notificacion_rapida(
+                        "Ya registraste entrada y salida hoy.",
+                        color_fondo="#f97316"
+                    )
+                    return
+
+                #
+                # === CASO C: TIENE ENTRADA PERO NO SALIDA ===
+                #
+                fecha_reg = ultima["asistencia"]
+                hora_ent = ultima["hora_entrada"]
+
+                # Normalizar la fecha
+                if hasattr(fecha_reg, "date"):
+                    fecha_reg = fecha_reg.date()
+
+                # Normalizar la hora (puede ser time, timedelta o str)
+                if isinstance(hora_ent, time):
+                    hora_ent_time = hora_ent
+                elif isinstance(hora_ent, timedelta):
+                    hora_ent_time = (datetime.min + hora_ent).time()
                 else:
-                    messagebox.showerror("Error", "No se pudo registrar la asistencia")
-            else:
-                messagebox.showerror("Error", 
-                    "Huella no reconocida. Por favor, intente nuevamente o contacte al administrador.")
+                    # Intento de convertir cadena HH:MM(:SS)
+                    try:
+                        hora_ent_time = datetime.strptime(str(hora_ent), "%H:%M:%S").time()
+                    except:
+                        hora_ent_time = datetime.strptime(str(hora_ent), "%H:%M").time()
+
+                dt_entrada = datetime.combine(fecha_reg, hora_ent_time)
+
+                # Reglas del minuto mínimo
+                if ahora - dt_entrada < timedelta(hours=4):
+                    self.mostrar_notificacion_rapida(
+                        "Debes esperar al menos 4 horas desde tu entrada para marcar salida.",
+                        color_fondo="#dc2626"
+                    )
+                    return
+
+                # Registrar salida
+                if self.controlador.registrar_salida(ultima["id"]):
+                    self._actualizar_asistencias_hoy()
+                    self.mostrar_notificacion_rapida("Salida exitosa", "#0ea5e9")
+                else:
+                    self.mostrar_notificacion_rapida("Error al registrar salida", "#dc2626")
+
+            except Exception as e:
+                print(f"Error en manejo de verificación de huella: {e}")
+                import traceback
+                traceback.print_exc()
+                messagebox.showerror("Error", "Ocurrió un error al procesar la huella.")
+
 
         # Botón escanear huella
         btn_escanear = tk.Button(panel_lector, text="Escanear Huella", font=("Arial", 12, "bold"),
@@ -1424,19 +1508,19 @@ class VentanaPrincipal:
         # Crear el Treeview con las columnas necesarias
         self.tree_asistencias = ttk.Treeview(
             frame_tabla, 
-            columns=("id", "nombre", "hora_entrada", "hora_salida", "accion"), 
+            columns=("id", "nombre", "hora_entrada", "hora_salida"), 
             show="headings",
             yscrollcommand=scrollbar.set,
             selectmode="browse"
         )
+
         
         # Configurar las columnas
         columnas = [
             ("id", "ID", 0, "w"),  # Columna oculta para el ID
             ("nombre", "Estudiante", 130, "w"),
             ("hora_entrada", "Hora de Entrada", 30, "center"),
-            ("hora_salida", "Hora de Salida", 30, "center"),
-            ("accion", "Acción", 140, "center")
+            ("hora_salida", "Hora de Salida", 30, "center")
         ]
         
         for col_id, heading, width, anchor in columnas:
@@ -1448,31 +1532,7 @@ class VentanaPrincipal:
                 stretch=tk.NO if col_id == "id" else tk.YES
             )
         
-        # Configurar el estilo para el botón de acción
-        style = ttk.Style()
         
-        # Configurar el tag para elementos clickeables con apariencia de botón
-        # Usamos caracteres especiales para simular un borde
-        self.tree_asistencias.tag_configure('clickable', 
-                                          foreground='#1d4ed8',  # Texto azul oscuro
-                                          font=('Consolas', 9, 'bold'))
-        
-        # Configurar el tag para el estado hover
-        self.tree_asistencias.tag_configure('hover', 
-                                          foreground='#1e40af',
-                                          font=('Consolas', 9, 'bold'))
-        
-        # Configurar el tag para el estado activo (click)
-        self.tree_asistencias.tag_configure('active', 
-                                          foreground='#1e3a8a',
-                                          font=('Consolas', 9, 'bold'))
-        
-        # Asegurar que la columna de acción tenga suficiente ancho
-        self.tree_asistencias.column('#5', width=150, anchor=tk.CENTER)
-        
-        # Configurar el evento de clic
-        self.tree_asistencias.bind("<Button-1>", self._on_button_click)
-        self.tree_asistencias.bind("<Motion>", self._on_motion)
         
         self.tree_asistencias.pack(side="left", fill="both", expand=True)
         scrollbar.config(command=self.tree_asistencias.yview)
@@ -1634,76 +1694,104 @@ class VentanaPrincipal:
         if not hasattr(self, 'tree_asistencias'):
             print("Error: tree_asistencias no está definido")
             return
-        # Limpiar la tabla actual
+
+        # Limpiar tabla
         for item in self.tree_asistencias.get_children():
             self.tree_asistencias.delete(item)
-        # Verificar si el controlador está disponible
+
+        # Validar controlador
         if not hasattr(self, 'controlador') or not self.controlador:
             print("Error: Controlador no disponible")
             self.tree_asistencias.insert("", "end", values=("Error: Controlador no disponible", "", "", ""))
             return
+
         try:
-            # Obtener las asistencias del día desde el controlador
+            # Obtener asistencias del día
             asistencias = self.controlador.obtener_asistencias_hoy()
-            
+
             if not asistencias:
-                # Mostrar mensaje si no hay asistencias
-                self.tree_asistencias.insert("", "end", values=("No hay asistencias registradas hoy", "", "", ""))
+                self.tree_asistencias.insert("", "end",
+                    values=("No hay asistencias registradas hoy", "", "", ""))
                 return
-            # Agregar cada asistencia al Treeview
+
+            # Procesar asistencias
             for asistencia in asistencias:
                 try:
                     registro_id = asistencia[0]
-                    nombre = asistencia[1] if len(asistencia) > 1 and asistencia[1] else ""
-                    apellido_p = asistencia[2] if len(asistencia) > 2 and asistencia[2] else ""
-                    apellido_m = asistencia[3] if len(asistencia) > 3 and asistencia[3] else ""
+                    nombre = asistencia[1] if len(asistencia) > 1 else ""
+                    apellido_p = asistencia[2] if len(asistencia) > 2 else ""
+                    apellido_m = asistencia[3] if len(asistencia) > 3 else ""
                     hora_entrada = asistencia[4] if len(asistencia) > 4 else ""
                     hora_salida = asistencia[5] if len(asistencia) > 5 else ""
-                    
+
                     nombre_completo = f"{nombre} {apellido_p} {apellido_m}".strip()
-                    
-                    # Formatear las horas
+
+                    # Formateo de horas
                     def formatear_hora(hora):
                         if not hora:
                             return ""
                         if isinstance(hora, str):
-                            if ' ' in hora:  # Si es un datetime como string
-                                return hora.split()[-1][:8]  # Extraer solo la hora
-                            return hora[:8]  # Tomar solo HH:MM:SS si es solo hora
-                        if hasattr(hora, 'strftime'):  # Si es un objeto datetime
+                            return hora.split()[-1][:8] if " " in hora else hora[:8]
+                        if hasattr(hora, "strftime"):
                             return hora.strftime("%H:%M:%S")
                         return str(hora)
-                    
+
                     hora_entrada_fmt = formatear_hora(hora_entrada)
                     hora_salida_fmt = formatear_hora(hora_salida)
-                    
-                    # Siempre mostrar el botón Registrar Salida
-                    accion = "[ REGISTRAR SALIDA ]"
-                    tags = ('clickable',)
-                        
-                    item_id = self.tree_asistencias.insert(
-                        "", 
-                        "end", 
+
+                    # Insertar fila sin columna de acción
+                    self.tree_asistencias.insert(
+                        "",
+                        "end",
                         values=(
-                            registro_id,  # ID oculto
-                            nombre_completo, 
-                            hora_entrada_fmt, 
-                            hora_salida_fmt,
-                            accion
-                        ),
-                        tags=tags
+                            registro_id,
+                            nombre_completo,
+                            hora_entrada_fmt,
+                            hora_salida_fmt
+                        )
                     )
-                    
-                    # Asegurarse de que la columna de acción tenga el ancho adecuado
-                    self.tree_asistencias.column("#5", width=120, minwidth=120, anchor=tk.CENTER)
+
                 except Exception as e:
                     print(f"Error al procesar asistencia: {e}")
                     traceback.print_exc()
                     continue
+
         except Exception as e:
             print(f"Error al actualizar asistencias: {e}")
             traceback.print_exc()
-            self.tree_asistencias.insert("", "end", values=(f"Error: {str(e)}", "", "", ""))
+            self.tree_asistencias.insert("", "end",
+                values=(f"Error: {str(e)}", "", "", ""))
+
+
+    def mostrar_notificacion_rapida(self, texto, color_fondo="#16a34a"):
+        """
+        Muestra un recuadro pequeño durante 1 segundo (tipo 'toast').
+        """
+        import tkinter as tk  # por si no está al inicio
+
+        win = tk.Toplevel(self.ventana)
+        win.overrideredirect(True)        # sin bordes
+        win.configure(bg=color_fondo)
+
+        label = tk.Label(
+            win,
+            text=texto,
+            bg=color_fondo,
+            fg="white",
+            font=("Arial", 11, "bold"),
+            padx=20,
+            pady=10
+        )
+        label.pack()
+
+        # Posición: centrado arriba de la ventana principal
+        self.ventana.update_idletasks()
+        x = self.ventana.winfo_rootx() + (self.ventana.winfo_width() - win.winfo_reqwidth()) // 2
+        y = self.ventana.winfo_rooty() + 80
+        win.geometry(f"+{x}+{y}")
+
+        # Cerrar solo
+        win.after(1000, win.destroy)
 
 
 # ---------------------------------------- Contenido de la pestaña reportes ----------------------------------------
@@ -2037,10 +2125,7 @@ class VentanaPrincipal:
         except Exception as e:
             messagebox.showerror("Error", f"No se pudo generar el reporte:\n{e}")
 
-
-
-
-  
+ 
     def _mostrar_informacion_estudiante(self, estudiante):
         """Muestra la información del estudiante en el reporte, con botones fijos PDF/Excel a la derecha"""
         
@@ -2272,6 +2357,8 @@ class VentanaPrincipal:
         except Exception as e:
             print(f"Error al obtener estadísticas: {e}")
             traceback.print_exc()
+
+
     
     def _crear_tarjeta_estadistica(self, parent, titulo, valor, color):
         """Crea una tarjeta de estadística"""
@@ -2433,19 +2520,18 @@ class VentanaPrincipal:
 
 
     def _cargar_tabla_generacion(self, top):
-        """Rellena la tabla por generación usando generacion_id y respetando el filtro de mes/año o rango."""
+        """Rellena la tabla por generación usando el nombre de la generación y respetando el filtro de mes/año o rango."""
         if not hasattr(self, "_tv_gen"):
             return
 
-        # 1) Obtener el nombre seleccionado y resolver su ID
+        # 1) Obtener el nombre seleccionado
         gen_nombre = (self._combo_gen.get() or "").strip()
-        gen_id = (getattr(self, "_map_gen_name_to_id", {}) or {}).get(gen_nombre)
-        if not gen_id:
-            messagebox.showwarning("Aviso", "No se pudo resolver el ID de la generación seleccionada.")
+        if not gen_nombre:
+            messagebox.showwarning("Aviso", "Selecciona una generación válida.")
             return
 
-        # 2) Consultar filas por generacion_id (el modelo ya hace JOIN a generaciones/teachers)
-        rows = self.controlador.obtener_estudiantes_por_generacion(gen_id) or []
+        # 2) Consultar filas por nombre de generación (el modelo filtra por a.generacion)
+        rows = self.controlador.obtener_estudiantes_por_generacion(gen_nombre) or []
 
         # 3) Limpiar la tabla
         for r in self._tv_gen.get_children():
@@ -2833,307 +2919,408 @@ class VentanaPrincipal:
 
     
     def _generar_pdf_alumno(self, meta: dict, carpeta_salida: str = None, dest_path: str = None) -> str:
-            """
-            Genera un PDF individual para el alumno usando el diseño de fondo.
-            - Si dest_path está dado, guarda ahí.
-            - En caso contrario, construye el nombre dentro de carpeta_salida.
-            Devuelve la ruta creada.
-            """
-            def slugify(s):
-                s = "" if s is None else str(s)
-                s = "".join(c for c in unicodedata.normalize("NFKD", s) if not unicodedata.combining(c))
-                # permitir letras, números, guiones, puntos y espacios
-                s = re.sub(r"[^\w\-. ]+", "", s, flags=re.UNICODE)
-                return s.strip().replace(" ", "_")
+        """
+        Genera un PDF individual para el alumno usando el diseño de fondo.
+        """
 
-            # construir nombre si no se pasó dest_path
-            if dest_path is None:
-                if not carpeta_salida:
-                    raise ValueError("Debe especificarse dest_path o carpeta_salida")
-                nombre_archivo = f"reporte_{slugify(meta.get('matricula',''))}_{slugify(meta.get('nombre',''))}.pdf"
-                dest_path = os.path.join(carpeta_salida, nombre_archivo)
+        def slugify(s):
+            s = "" if s is None else str(s)
+            s = "".join(c for c in unicodedata.normalize("NFKD", s) if not unicodedata.combining(c))
+            s = re.sub(r"[^\w\-. ]+", "", s, flags=re.UNICODE)
+            return s.strip().replace(" ", "_")
 
-            # ------- datos de filtros / periodo -------
-            filtros = meta.get("filtros", {}) if isinstance(meta, dict) else {}
-            mes = filtros.get("mes")
-            anio = filtros.get("anio")
-            fi = filtros.get("fecha_inicio")
-            ff = filtros.get("fecha_fin")
+        # construir nombre si no se pasó dest_path
+        if dest_path is None:
+            if not carpeta_salida:
+                raise ValueError("Debe especificarse dest_path o carpeta_salida")
+            nombre_archivo = f"reporte_{slugify(meta.get('matricula',''))}_{slugify(meta.get('nombre',''))}.pdf"
+            dest_path = os.path.join(carpeta_salida, nombre_archivo)
 
-            try:
-                mes_nombre = self.combo_mes.get()
-            except Exception:
-                mes_nombre = str(mes) if mes else ""
+        # ------- datos de filtros / periodo -------
+        filtros = meta.get("filtros", {}) if isinstance(meta, dict) else {}
+        mes = filtros.get("mes")
+        anio = filtros.get("anio")
+        fi = filtros.get("fecha_inicio")
+        ff = filtros.get("fecha_fin")
 
-            encabezado_rango = ""
-            if mes and anio:
-                encabezado_rango = f"Mes {mes_nombre} {anio}"
-            elif fi and ff:
-                encabezado_rango = f"Del {fi} al {ff}"
+        try:
+            mes_nombre = self.combo_mes.get()
+        except Exception:
+            mes_nombre = str(mes) if mes else ""
 
-            # ------- estadísticas -------
-            estad = meta.get("estad", {}) or {}
-            tot_hrs = str(estad.get("total_horas_mes", estad.get("total_horas_periodo", "0.00")))
-            prom_sem = str(estad.get("promedio_semanal", "0.00"))
-            prom_mes = str(estad.get("promedio_mensual", "0.00"))
-            hora_ent = estad.get("hora_entrada_frecuente", "--:--")
-            hora_sal = estad.get("hora_salida_frecuente", "--:--")
-            historial = estad.get("historial", []) or []
+        encabezado_rango = ""
+        if mes and anio:
+            encabezado_rango = f"Mes {mes_nombre} {anio}"
+        elif fi and ff:
+            encabezado_rango = f"Del {fi} al {ff}"
 
-            # ------- datos del alumno -------
-            nombre_alumno = (meta.get("nombre", "") or "").strip()
-            matricula = str(meta.get("matricula", "") or "")
-            generacion = meta.get("generacion", "") or ""
-            asesor = meta.get("asesor", "") or ""
-            area = meta.get("area", meta.get("area_conocimiento", "")) or ""
-            carrera = meta.get("carrera", "") or ""
+        # ------- estadísticas -------
+        estad = meta.get("estad", {}) or {}
+        tot_hrs = str(estad.get("total_horas_mes", estad.get("total_horas_periodo", "0.00")))
+        prom_sem = str(estad.get("promedio_semanal", "0.00"))
+        prom_mes = str(estad.get("promedio_mensual", "0.00"))
+        hora_ent = estad.get("hora_entrada_frecuente", "--:--")
+        hora_sal = estad.get("hora_salida_frecuente", "--:--")
+        historial = estad.get("historial", []) or []
 
-            # ------- PDF -------
-            pdf = FPDF()  # P, mm, A4 por defecto
+        # ------- datos del alumno -------
+        nombre_alumno = (meta.get("nombre", "") or "").strip()
+        matricula = str(meta.get("matricula", "") or "")
+        generacion = meta.get("generacion", "") or ""
+        asesor = meta.get("asesor", "") or ""
+        area = meta.get("area", meta.get("area_conocimiento", "")) or ""
+        carrera = meta.get("carrera", "") or ""
+
+        # ------- PDF -------
+        pdf = FPDF()
+        pdf.add_page()
+
+        # Tamaño de página
+        page_w = pdf.w
+        page_h = pdf.h
+
+        # Límites dinámicos
+        Y_MAX_CONTENIDO = page_h - 40
+        Y_MAX_TABLA = page_h - 55
+
+        # Fondo
+        posibles_rutas = [
+            os.path.join("public", "static", "images", "diseño.png"),
+            os.path.join("public", "static", "images", "diseno.png"),
+            "diseño.png",
+            "diseno.png",
+        ]
+        try:
+            for ruta_img in posibles_rutas:
+                if os.path.exists(ruta_img):
+                    pdf.image(ruta_img, x=0, y=0, w=page_w, h=page_h)
+                    break
+        except:
+            pass
+
+        # Título
+        pdf.set_font("Arial", "B", 20)
+        pdf.set_xy(0, 40)
+        pdf.cell(0, 10, "REPORTE DE ASISTENCIAS", ln=True, align="C")
+
+        # Mes / periodo
+        pdf.set_font("Arial", "", 14)
+        if encabezado_rango:
+            pdf.cell(0, 8, encabezado_rango, ln=True, align="C")
+        pdf.ln(10)
+
+        # ============================================================
+        #     🟦 DATOS DEL ALUMNO (con MULTI_CELL para Carrera)
+        # ============================================================
+        pdf.set_font("Arial", "", 12)
+        line_h = 7
+
+        left_x = 15
+        right_x = 120      # más a la izquierda para mayor espacio
+        margin_r = 15
+
+        left_w = right_x - left_x - 5
+        right_w = page_w - right_x - margin_r
+
+        y = pdf.get_y()
+
+        # 1️⃣ Alumno / Matrícula
+        pdf.set_xy(left_x, y)
+        pdf.cell(left_w, line_h, f"Estudiante: {nombre_alumno}", ln=0)
+
+        pdf.set_xy(right_x, y)
+        pdf.multi_cell(right_w, line_h, f"Matrícula: {matricula}")
+        y = max(y + line_h, pdf.get_y())
+
+        # 2️⃣ Generación / Asesor
+        pdf.set_xy(left_x, y)
+        pdf.cell(left_w, line_h, f"Generación: {generacion}", ln=0)
+
+        pdf.set_xy(right_x, y)
+        pdf.multi_cell(right_w, line_h, f"Asesor: {asesor}")
+        y = max(y + line_h, pdf.get_y())
+
+        # 3️⃣ Área / Carrera (carrera con salto automático)
+        pdf.set_xy(left_x, y)
+        pdf.cell(left_w, line_h, f"Área: {area}", ln=0)
+
+        pdf.set_xy(right_x, y)
+        pdf.multi_cell(right_w, line_h, f"Carrera: {carrera}")
+        y = max(y + line_h, pdf.get_y())
+
+        pdf.set_y(y + 5)
+        # ============================================================
+
+        # Resumen
+        pdf.set_font("Arial", "B", 12)
+        pdf.cell(0, line_h, "Resumen:", ln=True)
+        pdf.set_font("Arial", "", 12)
+        pdf.cell(0, line_h, f"Total de horas en el periodo: {tot_hrs}", ln=True)
+        pdf.cell(0, line_h, f"Promedio semanal: {prom_sem}", ln=True)
+        pdf.cell(0, line_h, f"Promedio mensual: {prom_mes}", ln=True)
+        pdf.cell(0, line_h, f"Hora más frecuente de entrada: {hora_ent}", ln=True)
+        pdf.cell(0, line_h, f"Hora más frecuente de salida: {hora_sal}", ln=True)
+
+        pdf.ln(10)
+
+        # Historial
+        pdf.set_font("Arial", "B", 12)
+        pdf.cell(0, line_h, "Historial de Asistencias", ln=True)
+        pdf.ln(2)
+
+        # Tabla
+        pdf.set_font("Arial", "B", 10)
+        col_w = [40, 40, 40, 40]
+        headers = ["Fecha", "Hora Entrada", "Hora Salida", "Horas Presentes"]
+        ALTURA_FILA = 7
+
+        for w, h in zip(col_w, headers):
+            pdf.cell(w, 8, h, border=1, align="C")
+        pdf.ln(8)
+
+        pdf.set_font("Arial", "", 9)
+        for reg in historial:
+            if pdf.get_y() + ALTURA_FILA > Y_MAX_TABLA:
+                pdf.add_page()
+                page_w = pdf.w
+                page_h = pdf.h
+                Y_MAX_CONTENIDO = page_h - 40
+                Y_MAX_TABLA = page_h - 55
+
+                try:
+                    for ruta_img in posibles_rutas:
+                        if os.path.exists(ruta_img):
+                            pdf.image(ruta_img, x=0, y=0, w=page_w, h=page_h)
+                            break
+                except:
+                    pass
+
+                pdf.set_y(50)
+
+                pdf.set_font("Arial", "B", 10)
+                for w, h in zip(col_w, headers):
+                    pdf.cell(w, 8, h, border=1, align="C")
+                pdf.ln(8)
+                pdf.set_font("Arial", "", 9)
+
+            pdf.cell(col_w[0], ALTURA_FILA, str(reg.get("fecha", "")), border=1, align="C")
+            pdf.cell(col_w[1], ALTURA_FILA, str(reg.get("hora_entrada", "")), border=1, align="C")
+            pdf.cell(col_w[2], ALTURA_FILA, str(reg.get("hora_salida", "")), border=1, align="C")
+            pdf.cell(col_w[3], ALTURA_FILA, str(reg.get("horas_presentes", "")), border=1, align="C")
+            pdf.ln(ALTURA_FILA)
+
+        # Firma
+        FIRMA_ALTURA = 22
+
+        if pdf.get_y() + FIRMA_ALTURA > Y_MAX_CONTENIDO:
             pdf.add_page()
+            page_w = pdf.w
+            page_h = pdf.h
+            Y_MAX_CONTENIDO = page_h - 40
+            Y_MAX_TABLA = page_h - 55
 
-            # Fondo (diseño.png). Se intentan varias rutas posibles.
             try:
-                posibles_rutas = [
-                    os.path.join("public", "static", "images", "diseño.png"),
-                    os.path.join("public", "static", "images", "diseno.png"),
-                    "diseño.png",
-                    "diseno.png",
-                ]
                 for ruta_img in posibles_rutas:
                     if os.path.exists(ruta_img):
-                        pdf.image(ruta_img, x=0, y=0, w=pdf.w)
+                        pdf.image(ruta_img, x=0, y=0, w=page_w, h=page_h)
                         break
-            except Exception:
-                # Si falla la imagen, continuamos sin fondo
+            except:
                 pass
 
-            # Título
-            pdf.set_font("Arial", "B", 20)
-            pdf.set_xy(0, 40)  # algo abajo del encabezado del diseño
-            pdf.cell(0, 10, "REPORTE INDIVIDUAL DE ASISTENCIAS", ln=True, align="C")
+        y_firma = max(pdf.get_y() + 10, Y_MAX_CONTENIDO - FIRMA_ALTURA)
+        pdf.set_y(y_firma)
 
-            # Línea de mes / periodo
-            pdf.set_font("Arial", "", 14)
-            if encabezado_rango:
-                pdf.cell(0, 8, encabezado_rango, ln=True, align="C")
-            pdf.ln(10)
+        pdf.set_font("Arial", "", 11)
+        pdf.ln(4)
+        pdf.cell(0, 6, "______________________________", ln=True, align="C")
 
-            # Datos del alumno (dos columnas)
-            pdf.set_font("Arial", "", 12)
-            line_h = 7
-            left_x = 20
-            right_x = 115
+        texto_asesor = f"Asesor: {asesor}" if asesor else "Asesor"
+        pdf.ln(2)
+        pdf.cell(0, 6, texto_asesor, ln=True, align="C")
 
-            y_ini = pdf.get_y()
-            pdf.set_xy(left_x, y_ini)
-            pdf.cell(0, line_h, f"Alumno: {nombre_alumno}", ln=False)
-            pdf.set_xy(right_x, y_ini)
-            pdf.cell(0, line_h, f"Matrícula: {matricula}", ln=True)
-
-            y = pdf.get_y()
-            pdf.set_xy(left_x, y)
-            pdf.cell(0, line_h, f"Generación: {generacion}", ln=False)
-            pdf.set_xy(right_x, y)
-            pdf.cell(0, line_h, f"Asesor: {asesor}", ln=True)
-
-            y = pdf.get_y()
-            pdf.set_xy(left_x, y)
-            pdf.cell(0, line_h, f"Área: {area}", ln=False)
-            pdf.set_xy(right_x, y)
-            pdf.cell(0, line_h, f"Carrera: {carrera}", ln=True)
-
-            pdf.ln(8)
-
-            # Resumen
-            pdf.set_font("Arial", "B", 12)
-            pdf.cell(0, line_h, "Resumen:", ln=True)
-            pdf.set_font("Arial", "", 12)
-            pdf.cell(0, line_h, f"Total de horas en el periodo: {tot_hrs}", ln=True)
-            pdf.cell(0, line_h, f"Promedio semanal: {prom_sem}", ln=True)
-            pdf.cell(0, line_h, f"Promedio mensual: {prom_mes}", ln=True)
-            pdf.cell(0, line_h, f"Hora más frecuente de entrada: {hora_ent}", ln=True)
-            pdf.cell(0, line_h, f"Hora más frecuente de salida: {hora_sal}", ln=True)
-
-            pdf.ln(10)
-
-            # Historial de asistencias
-            pdf.set_font("Arial", "B", 12)
-            pdf.cell(0, line_h, "Historial de Asistencias", ln=True)
-            pdf.ln(2)
-
-            pdf.set_font("Arial", "B", 10)
-            col_w = [40, 40, 40, 40]
-            headers = ["Fecha", "Hora Entrada", "Hora Salida", "Horas Presentes"]
-
-            for w, h in zip(col_w, headers):
-                pdf.cell(w, 8, h, border=1, align="C")
-            pdf.ln(8)
-
-            pdf.set_font("Arial", "", 9)
-            for reg in historial:
-                # Si se queda sin espacio, nueva página con fondo y cabeceras de tabla
-                if pdf.get_y() > 260:
-                    pdf.add_page()
-                    try:
-                        for ruta_img in posibles_rutas:
-                            if os.path.exists(ruta_img):
-                                pdf.image(ruta_img, x=0, y=0, w=pdf.w)
-                                break
-                    except Exception:
-                        pass
-                    pdf.set_font("Arial", "B", 10)
-                    for w, h in zip(col_w, headers):
-                        pdf.cell(w, 8, h, border=1, align="C")
-                    pdf.ln(8)
-                    pdf.set_font("Arial", "", 9)
-
-                pdf.cell(col_w[0], 7, str(reg.get("fecha", "")), border=1, align="C")
-                pdf.cell(col_w[1], 7, str(reg.get("hora_entrada", "")), border=1, align="C")
-                pdf.cell(col_w[2], 7, str(reg.get("hora_salida", "")), border=1, align="C")
-                pdf.cell(col_w[3], 7, str(reg.get("horas_presentes", "")), border=1, align="C")
-                pdf.ln(7)
-            # ============== PROTECCIÓN (si la librería lo soporta) ==============
-            if hasattr(pdf, "set_encryption"):
-                try:
-                    pdf.set_encryption(
-                        owner_password="12345",    # contraseña para modificar/quitar protección
-                        user_password=None,        # None o "" => se abre sin pedir contraseña
-                        permissions=(
+        # Protección
+        if hasattr(pdf, "set_encryption"):
+            try:
+                pdf.set_encryption(
+                    owner_password="12345",
+                    user_password=None,
+                    permissions=(
                         AccessPermission.PRINT_LOW_RES |
                         AccessPermission.PRINT_HIGH_RES
-                        )  # ✅ solo se permite imprimir, NO copiar/editar
                     )
-                except Exception as e:
-                    print(f"ADVERTENCIA: No se pudo aplicar protección al PDF: {e}")
-            else:
-                print("ADVERTENCIA: Esta versión de FPDF no tiene set_protection (no es fpdf2).")
-            # ====================================================================
+                )
+            except:
+                pass
 
-            pdf.output(dest_path)
-            return dest_path
+        pdf.output(dest_path)
+        return dest_path
 
 
     def _enviar_reporte_generacion_por_correo(self, top):
-            """Genera y envía por correo un PDF individual a cada alumno (seleccionados o todos).
-            Envía 2 correos por alumno: uno al alumno y otro al asesor (si hay), con textos distintos.
-            """
-            from tkinter import messagebox
-            import tempfile, shutil, time
+        """
+        Genera y envía por correo un PDF individual a cada alumno (seleccionados o todos).
+        Se ejecuta en un hilo secundario para no congelar la interfaz.
+        """
+        import threading
+        import tempfile, shutil, time
+        from tkinter import messagebox
 
-            # Mailer
+        # Aviso rápido (no bloqueante) de que empezó el envío
+        if hasattr(self, "mostrar_notificacion_rapida"):
+            self.mostrar_notificacion_rapida("Enviando reportes por correo...", "#2563eb")
+
+        def worker():
+            # Todo el trabajo pesado va aquí, en otro hilo
             try:
-                from config.email import send_mail
-            except Exception:
-                send_mail = None
-
-            if send_mail is None:
-                messagebox.showerror(
-                    "Correo no disponible",
-                    "No se encontró config.emailer.send_mail. Configura config/.env y config/emailer.py."
-                )
-                return
-
-            # Validación de datos cargados
-            if not hasattr(self, "_tv_gen") or not hasattr(self, "_gen_row_meta"):
-                messagebox.showerror("Error", "No hay datos cargados. Usa 'Mostrar' antes de enviar.")
-                return
-
-            # Selección vs todos
-            seleccion = list(self._tv_gen.selection())
-            if seleccion:
-                metas = [self._gen_row_meta[i] for i in seleccion if i in self._gen_row_meta]
-            else:
-                metas = [self._gen_row_meta[i] for i in self._tv_gen.get_children() if i in self._gen_row_meta]
-
-            if not metas:
-                messagebox.showinfo("Sin destinatarios", "No hay alumnos para enviar.")
-                return
-
-            # Helper para el texto del periodo (mes/año o rango)
-            def _texto_periodo_local(meta: dict) -> str:
-                f = meta.get("filtros", {}) if isinstance(meta, dict) else {}
-                mes = f.get("mes"); anio = f.get("anio")
-                fi = f.get("fecha_inicio"); ff = f.get("fecha_fin")
+                # Mailer
                 try:
-                    mes_nombre = self.combo_mes.get()
+                    from config.email import send_mail
                 except Exception:
-                    mes_nombre = str(mes) if mes else ""
-                if mes and anio:
-                    return f"{mes_nombre} {anio}"
-                if fi and ff:
-                    return f"del {fi} al {ff}"
-                return "del periodo seleccionado"
+                    send_mail = None
 
-            tmpdir = tempfile.mkdtemp(prefix="reportes_ind_")
-            enviados, sin_correo, errores = 0, 0, 0
+                if send_mail is None:
+                    # Mostrar error en el hilo principal
+                    self.ventana.after(
+                        0,
+                        lambda: messagebox.showerror(
+                            "Correo no disponible",
+                            "No se encontró config.emailer.send_mail. Configura config/.env y config/emailer.py."
+                        )
+                    )
+                    return
 
-            try:
-                for meta in metas:
-                    correo_alumno = (meta.get("email") or "").strip()
-                    if not correo_alumno:
-                        sin_correo += 1
-                        continue
+                # Validación de datos cargados
+                if not hasattr(self, "_tv_gen") or not hasattr(self, "_gen_row_meta"):
+                    self.ventana.after(
+                        0,
+                        lambda: messagebox.showerror(
+                            "Error",
+                            "No hay datos cargados. Usa 'Mostrar' antes de enviar."
+                        )
+                    )
+                    return
 
+                # Selección vs todos
+                seleccion = list(self._tv_gen.selection())
+                if seleccion:
+                    metas = [self._gen_row_meta[i] for i in seleccion if i in self._gen_row_meta]
+                else:
+                    metas = [self._gen_row_meta[i] for i in self._tv_gen.get_children() if i in self._gen_row_meta]
+
+                if not metas:
+                    self.ventana.after(
+                        0,
+                        lambda: messagebox.showinfo("Sin destinatarios", "No hay alumnos para enviar.")
+                    )
+                    return
+
+                # Helper para el texto del periodo (mes/año o rango)
+                def _texto_periodo_local(meta: dict) -> str:
+                    f = meta.get("filtros", {}) if isinstance(meta, dict) else {}
+                    mes = f.get("mes"); anio = f.get("anio")
+                    fi = f.get("fecha_inicio"); ff = f.get("fecha_fin")
                     try:
-                        # Genera PDF individual en carpeta temporal
-                        pdf_path = self._generar_pdf_alumno(meta, carpeta_salida=tmpdir)
+                        mes_nombre = self.combo_mes.get()
+                    except Exception:
+                        mes_nombre = str(mes) if mes else ""
+                    if mes and anio:
+                        return f"{mes_nombre} {anio}"
+                    if fi and ff:
+                        return f"del {fi} al {ff}"
+                    return "del periodo seleccionado"
 
-                        periodo_txt = _texto_periodo_local(meta)
-                        alumno_nombre = meta.get("nombre", "")
-                        alumno_matricula = str(meta.get("matricula", "") or "")
-                        asesor_email = (meta.get("asesor_email") or "").strip()
-                        asesor_nombre = (meta.get("asesor") or "").strip()
+                tmpdir = tempfile.mkdtemp(prefix="reportes_ind_")
+                enviados, sin_correo, errores = 0, 0, 0
+                errores_detalle = []
 
-                        # ----- Correo al ALUMNO -----
-                        cuerpo_alumno = (
-                            f"Hola {alumno_nombre},\n\n"
-                            f"Adjunto encontrarás tu reporte de asistencias {periodo_txt}.\n\n"
-                            "Saludos."
-                        )
-                        send_mail(
-                            subject=f"Reporte de asistencias — {alumno_nombre} — {periodo_txt}",
-                            body=cuerpo_alumno,
-                            to_list=[correo_alumno],
-                            attachments=[pdf_path]
-                        )
-                        enviados += 1
+                try:
+                    for meta in metas:
+                        correo_alumno = (meta.get("email") or "").strip()
+                        if not correo_alumno:
+                            sin_correo += 1
+                            continue
 
-                        # ----- Correo al ASESOR (si hay) -----
-                        if asesor_email:
-                            saludo = f"Hola {asesor_nombre}," if asesor_nombre else "Hola,"
-                            cuerpo_asesor = (
-                                f"{saludo}\n\n"
-                                f"Adjunto el reporte mensual de asistencias del alumno "
-                                f"{alumno_nombre} ({alumno_matricula}) correspondiente a {periodo_txt}.\n\n"
-                                "Quedo atento(a) a cualquier comentario.\n\nSaludos."
+                        try:
+                            # Genera PDF individual en carpeta temporal
+                            pdf_path = self._generar_pdf_alumno(meta, carpeta_salida=tmpdir)
+
+                            periodo_txt = _texto_periodo_local(meta)
+                            alumno_nombre = meta.get("nombre", "")
+                            alumno_matricula = str(meta.get("matricula", "") or "")
+                            asesor_email = (meta.get("asesor_email") or "").strip()
+                            asesor_nombre = (meta.get("asesor") or "").strip()
+
+                            # ----- Correo al ALUMNO -----
+                            cuerpo_alumno = (
+                                f"Hola {alumno_nombre},\n\n"
+                                f"Adjunto encontrarás tu reporte de asistencias {periodo_txt}.\n\n"
+                                "Saludos."
                             )
                             send_mail(
-                                subject=f"Reporte del alumno {alumno_nombre} — {periodo_txt}",
-                                body=cuerpo_asesor,
-                                to_list=[asesor_email],
+                                subject=f"Reporte de asistencias — {alumno_nombre} — {periodo_txt}",
+                                body=cuerpo_alumno,
+                                to_list=[correo_alumno],
                                 attachments=[pdf_path]
                             )
+                            enviados += 1
 
-                        # Pausa corta para evitar throttling del servidor SMTP
-                        time.sleep(0.4)
+                            # ----- Correo al ASESOR (si hay) -----
+                            if asesor_email:
+                                saludo = f"Hola {asesor_nombre}," if asesor_nombre else "Hola,"
+                                cuerpo_asesor = (
+                                    f"{saludo}\n\n"
+                                    f"Adjunto el reporte mensual de asistencias del alumno "
+                                    f"{alumno_nombre} ({alumno_matricula}) correspondiente a {periodo_txt}.\n\n"
+                                    "Quedo atento(a) a cualquier comentario.\n\nSaludos."
+                                )
+                                send_mail(
+                                    subject=f"Reporte del alumno {alumno_nombre} — {periodo_txt}",
+                                    body=cuerpo_asesor,
+                                    to_list=[asesor_email],
+                                    attachments=[pdf_path]
+                                )
 
-                    except Exception as e:
-                        errores += 1
-                        messagebox.showerror("Error de envío", f"Alumno: {correo_alumno}\n\n{e}")
+                            # Pausa corta para evitar throttling del servidor SMTP
+                            time.sleep(0.4)
 
-            finally:
-                # Limpieza de temporales
-                try:
-                    shutil.rmtree(tmpdir, ignore_errors=True)
-                except Exception:
-                    pass
+                        except Exception as e:
+                            errores += 1
+                            errores_detalle.append(f"{correo_alumno}: {e}")
 
-            messagebox.showinfo(
-                "Envío de reportes",
-                f"Enviados: {enviados}\nSin correo: {sin_correo}\nErrores: {errores}"
-            )
-  
+                finally:
+                    # Limpieza de temporales
+                    try:
+                        shutil.rmtree(tmpdir, ignore_errors=True)
+                    except Exception:
+                        pass
+
+                # Mostrar resumen en el hilo principal
+                def mostrar_resumen():
+                    msg = f"Enviados: {enviados}\nSin correo: {sin_correo}\nErrores: {errores}"
+                    if errores_detalle:
+                        msg += "\n\nDetalles de errores:\n" + "\n".join(errores_detalle[:5])
+                        if len(errores_detalle) > 5:
+                            msg += f"\n(+ {len(errores_detalle) - 5} más...)"
+                    messagebox.showinfo("Envío de reportes", msg)
+
+                    # Si quieres cerrar la ventana 'top' al terminar:
+                    try:
+                        if top is not None and top.winfo_exists():
+                            top.destroy()
+                    except Exception:
+                        pass
+
+                self.ventana.after(0, mostrar_resumen)
+
+            except Exception as e:
+                # Cualquier fallo inesperado lo reportamos también en el hilo principal
+                def mostrar_error_final():
+                    messagebox.showerror("Error", f"Ocurrió un error durante el envío de correos:\n{e}")
+                self.ventana.after(0, mostrar_error_final)
+
+        # Lanzar el hilo en segundo plano
+        threading.Thread(target=worker, daemon=True).start()
+
     def _exportar_pdf_usuario(self):
         self.exportar_reporte_usuario(formato="pdf")
 
@@ -3198,7 +3385,7 @@ class VentanaPrincipal:
             # 3.1 Helpers internos: PDF y Excel
             # ==========================
             def _exportar_pdf_core():
-                nombre_sugerido = f"reporte_{estudiante.get('matricula','nombre')}_{seleccion}.pdf".replace(" ", "_")
+                nombre_sugerido = f"reporte_{estudiante.get('matricula','')}_{seleccion}.pdf".replace(" ", "_")
                 ruta_pdf = filedialog.asksaveasfilename(
                     defaultextension=".pdf",
                     filetypes=[("PDF files", "*.pdf")],
@@ -3859,7 +4046,7 @@ class VentanaPrincipal:
 
             # 1) Estado de vista
             self.vista_actual = 'general'
-            self.btn_exportar.config(state=tk.NORMAL, text="Exportar Reporte")
+            #self.btn_exportar.config(state=tk.NORMAL, text="Exportar Reporte")
 
             # 2) Preparar contenedor visual
             if hasattr(self, 'frame_mensaje_central') and self.frame_mensaje_central.winfo_ismapped():

@@ -11,7 +11,7 @@ def obtenerConexion():
             port = int(os.getenv("PORT", "3306")),
             user=os.getenv("USER",""),
             password=os.getenv("PASSWORD",""),
-            database=os.getenv("DB_NAME","asistencia_biometrica"),
+            database=os.getenv("DB_NAME","asistencia_biometrica1"),
             charset="utf8mb4",
             collation="utf8mb4_unicode_ci",
             use_pure=True
