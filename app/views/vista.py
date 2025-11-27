@@ -21,6 +21,10 @@ from openpyxl import Workbook
 from openpyxl.utils.dataframe import dataframe_to_rows
 import tempfile, os, shutil
 import os, unicodedata, re
+from datetime import datetime
+import locale
+import traceback
+
 
 try:
     from config.email import send_mail   # util para enviar email
@@ -2353,6 +2357,8 @@ class VentanaPrincipal:
         except Exception as e:
             print(f"Error al obtener estadísticas: {e}")
             traceback.print_exc()
+
+
     
     def _crear_tarjeta_estadistica(self, parent, titulo, valor, color):
         """Crea una tarjeta de estadística"""
@@ -2514,19 +2520,18 @@ class VentanaPrincipal:
 
 
     def _cargar_tabla_generacion(self, top):
-        """Rellena la tabla por generación usando generacion_id y respetando el filtro de mes/año o rango."""
+        """Rellena la tabla por generación usando el nombre de la generación y respetando el filtro de mes/año o rango."""
         if not hasattr(self, "_tv_gen"):
             return
 
-        # 1) Obtener el nombre seleccionado y resolver su ID
+        # 1) Obtener el nombre seleccionado
         gen_nombre = (self._combo_gen.get() or "").strip()
-        gen_id = (getattr(self, "_map_gen_name_to_id", {}) or {}).get(gen_nombre)
-        if not gen_id:
-            messagebox.showwarning("Aviso", "No se pudo resolver el ID de la generación seleccionada.")
+        if not gen_nombre:
+            messagebox.showwarning("Aviso", "Selecciona una generación válida.")
             return
 
-        # 2) Consultar filas por generacion_id (el modelo ya hace JOIN a generaciones/teachers)
-        rows = self.controlador.obtener_estudiantes_por_generacion(gen_id) or []
+        # 2) Consultar filas por nombre de generación (el modelo filtra por a.generacion)
+        rows = self.controlador.obtener_estudiantes_por_generacion(gen_nombre) or []
 
         # 3) Limpiar la tabla
         for r in self._tv_gen.get_children():
@@ -3011,7 +3016,7 @@ class VentanaPrincipal:
         line_h = 7
 
         left_x = 15
-        right_x = 105      # más a la izquierda para mayor espacio
+        right_x = 120      # más a la izquierda para mayor espacio
         margin_r = 15
 
         left_w = right_x - left_x - 5
@@ -3021,7 +3026,7 @@ class VentanaPrincipal:
 
         # 1️⃣ Alumno / Matrícula
         pdf.set_xy(left_x, y)
-        pdf.cell(left_w, line_h, f"Alumno: {nombre_alumno}", ln=0)
+        pdf.cell(left_w, line_h, f"Estudiante: {nombre_alumno}", ln=0)
 
         pdf.set_xy(right_x, y)
         pdf.multi_cell(right_w, line_h, f"Matrícula: {matricula}")
