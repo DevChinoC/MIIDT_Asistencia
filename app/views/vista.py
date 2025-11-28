@@ -1,4 +1,4 @@
-import os
+import os,sys
 import re
 import unicodedata
 from tkinter import simpledialog
@@ -25,6 +25,25 @@ from datetime import datetime
 import locale
 import traceback
 
+# ===========================================================
+# Carga del .env (compatible con ejecución normal y PyInstaller)
+# ===========================================================
+if getattr(sys, 'frozen', False):
+    BASE_DIR = sys._MEIPASS
+else:
+    # __file__ = app/views/vista.py
+    # Subimos 3 niveles → app/views → app → MIIDT_Asistencia
+    BASE_DIR = os.path.dirname(
+                    os.path.dirname(
+                        os.path.dirname(
+                            os.path.abspath(__file__)
+                        )
+                    )
+                )
+
+ENV_PATH = os.path.join(BASE_DIR, "config", ".env")
+load_dotenv(ENV_PATH)
+# ===========================================================
 
 try:
     from config.email import send_mail   # util para enviar email

@@ -64,7 +64,7 @@ class Modelo:
                     generacion_id, area_id, carrera_id,       -- nuevos FK IDs
                     asesor, asesor_id, 
                     created_at
-                ) VALUES (%s, %s, %s, %s, %s, %s,  %s, %s, %s,  %s, %s, %s,  %s, %s, %s,)
+                ) VALUES (%s, %s, %s, %s, %s, %s,  %s, %s, %s,  %s, %s, %s,  %s, %s, %s)
                 """,
                 (
                     email,
