@@ -13,3 +13,5 @@ pywin32==311
 reportlab==4.4.3
 six==1.17.0
 tzdata==2025.2
+bcrypt==4.2.0       
+pdf2image==1.17.0  
