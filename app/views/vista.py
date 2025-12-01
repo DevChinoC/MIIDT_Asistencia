@@ -1,4 +1,4 @@
-import os
+import os,sys
 import re
 import unicodedata
 from tkinter import simpledialog
@@ -25,6 +25,32 @@ from datetime import datetime
 import locale
 import traceback
 
+# ===========================================================
+# Carga de .env y rutas de recursos (normal + PyInstaller)
+# ===========================================================
+if getattr(sys, 'frozen', False):
+    BASE_DIR = sys._MEIPASS
+else:
+    # __file__ = app/views/vista.py  -> subimos a la raíz del proyecto
+    BASE_DIR = os.path.dirname(
+                    os.path.dirname(
+                        os.path.dirname(
+                            os.path.abspath(__file__)
+                        )
+                    )
+                )
+
+def resource_path(relative_path: str) -> str:
+    """
+    Devuelve la ruta absoluta a un recurso (iconos, imágenes, etc.),
+    funcionando tanto en modo script como en .exe (PyInstaller).
+    """
+    relative_path = relative_path.replace("/", os.sep)
+    return os.path.join(BASE_DIR, relative_path)
+
+ENV_PATH = os.path.join(BASE_DIR, "config", ".env")
+load_dotenv(ENV_PATH)
+# ===========================================================
 
 try:
     from config.email import send_mail   # util para enviar email
@@ -268,8 +294,12 @@ class VentanaPrincipal:
         return _on_mousewheel
 
     def _cargar_icono(self, icon_path, size=(16, 16)):
-        """Carga y redimensiona un ícono desde un archivo"""
+        """Carga y redimensiona un ícono desde un archivo (soporta .exe y modo normal)"""
         try:
+            # Si la ruta es relativa, pásala por resource_path
+            if not os.path.isabs(icon_path):
+                icon_path = resource_path(icon_path)
+
             img = Image.open(icon_path)
             img = img.resize(size, Image.Resampling.LANCZOS)
             return ImageTk.PhotoImage(img)
@@ -593,7 +623,8 @@ class VentanaPrincipal:
                 font=('Arial', 24, 'bold')).place(x=30, y=30)
 
         # Botón "Nuevo Estudiante" con icono redimensionado y alineado a la izquierda del texto
-        imagen_boton = Image.open("public/static/icons/nueva-cuenta-white.png")
+        imagen_boton = Image.open(resource_path("public/static/icons/nueva-cuenta-white.png"))
+
         imagen_boton = imagen_boton.resize((24, 24), Image.LANCZOS)
         icono_boton = ImageTk.PhotoImage(imagen_boton)
         btn_nuevo = tk.Button(
@@ -829,7 +860,7 @@ class VentanaPrincipal:
         
         # Icono
         try:
-            imagen = Image.open("public/static/icons/usuarios.png")
+            imagen = Image.open(resource_path("public/static/icons/usuarios.png"))
             imagen = imagen.resize((100, 100), Image.LANCZOS)
             icono_img = ImageTk.PhotoImage(imagen)
             icono = tk.Label(frame_mensaje, image=icono_img, bg="lightblue")
@@ -1005,7 +1036,7 @@ class VentanaPrincipal:
 
         icono_huella = None
         try:
-            img = Image.open("public/static/icons/huella-dactilar.png")
+            img = Image.open(resource_path("public/static/icons/huella-dactilar.png"))
             img = img.resize((18, 18), Image.LANCZOS)
             icono_huella = ImageTk.PhotoImage(img)
         except Exception:
@@ -1299,7 +1330,7 @@ class VentanaPrincipal:
                 self.cargar_estudiantes_reportes()
                 modal.destroy()
             else:
-                messagebox.showerror("Error", "No se pudo registrar el estudiante.")
+                messagebox.showerror("Error", "Error: huella y/o email ya resgitrados.")
 
         # --------------------------
         # Botón registrar
@@ -1358,7 +1389,7 @@ class VentanaPrincipal:
 
         # Icono huella
         try:
-            img = Image.open("public/static/icons/huella-dactilar.png")
+            img = Image.open(resource_path("public/static/icons/huella-dactilar.png"))
             img = img.resize((100, 100), Image.LANCZOS)
             icono_huella = ImageTk.PhotoImage(img)
             tk.Label(panel_lector, image=icono_huella, bg="white").pack(pady=10)
@@ -1791,7 +1822,7 @@ class VentanaPrincipal:
         win.geometry(f"+{x}+{y}")
 
         # Cerrar solo
-        win.after(1000, win.destroy)
+        win.after(2000, win.destroy)
 
 
 # ---------------------------------------- Contenido de la pestaña reportes ----------------------------------------
@@ -2025,7 +2056,7 @@ class VentanaPrincipal:
 
         # Cargar y mostrar el ícono
         try:
-            imagen = Image.open("public/static/icons/informe.png")
+            imagen = Image.open(resource_path("public/static/icons/informe.png"))
             imagen = imagen.resize((100, 100), Image.LANCZOS)
             self.icono_reporte = ImageTk.PhotoImage(imagen)
             icono_label = tk.Label(self.frame_mensaje_central, image=self.icono_reporte, bg="lightblue")
@@ -2985,19 +3016,17 @@ class VentanaPrincipal:
 
         # Fondo
         posibles_rutas = [
-            os.path.join("public", "static", "images", "diseño.png"),
-            os.path.join("public", "static", "images", "diseno.png"),
-            "diseño.png",
-            "diseno.png",
+            resource_path(os.path.join("public", "static", "images", "diseno.png")),
+            resource_path(os.path.join("public", "static", "images", "diseño.png")),
         ]
         try:
             for ruta_img in posibles_rutas:
                 if os.path.exists(ruta_img):
                     pdf.image(ruta_img, x=0, y=0, w=page_w, h=page_h)
                     break
-        except:
+        except Exception as e:
+            print(f"Error al cargar membrete PDF: {e}")
             pass
-
         # Título
         pdf.set_font("Arial", "B", 20)
         pdf.set_xy(0, 40)
