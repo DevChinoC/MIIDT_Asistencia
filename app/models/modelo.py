@@ -27,8 +27,19 @@ class Modelo:
         huella_digital, generacion, area_conocimiento, carrera,
         asesor, id_asesor,
     ):
-        """Registra un nuevo alumno. Evita duplicados por matrícula, conserva ceros a la izquierda
-        y resuelve catálogos a *_id (generacion_id, area_id, carrera_id)."""
+        """
+        Registra un nuevo alumno. Evita duplicados por matrícula, email y huella,
+        conserva ceros a la izquierda en matrícula y resuelve catálogos a *_id 
+        (generacion_id, area_id, carrera_id).
+
+        Returns:
+            True                   -> registro exitoso
+            "duplicado_matricula"  -> la matrícula ya existe
+            "duplicado_email"      -> el email ya existe
+            "duplicado_huella"     -> la huella ya está registrada
+            "duplicado"            -> otro error de integridad (FK, etc.)
+            False                  -> error general
+        """
         try:
             fecha_registro = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -39,15 +50,26 @@ class Modelo:
             )
             if self.cursor.fetchone():
                 print(f"⚠️ Matrícula duplicada detectada: {matricula}")
-                return "duplicado"
-            
+                return "duplicado_matricula"
+
+            # --- validar duplicado por email ---
             self.cursor.execute(
                 "SELECT 1 FROM alumnos WHERE email = %s LIMIT 1",
                 (str(email).strip(),)
             )
             if self.cursor.fetchone():
-                print(f"⚠️ Gmail duplicada detectada: {email}")
+                print(f"⚠️ Email duplicado detectado: {email}")
                 return "duplicado_email"
+
+            # --- validar duplicado por huella (si viene informada) ---
+            if huella_digital:
+                self.cursor.execute(
+                    "SELECT 1 FROM alumnos WHERE huella_digital = %s LIMIT 1",
+                    (huella_digital,)
+                )
+                if self.cursor.fetchone():
+                    print("⚠️ Huella duplicada detectada")
+                    return "duplicado_huella"
 
             # --- resolver IDs de catálogos (crea si no existen) ---
             gen_id  = self._id_por_nombre("generaciones", generacion)
@@ -82,12 +104,21 @@ class Modelo:
             self.db.commit()
             return True
 
-            # Manejo de duplicados por UNIQUE (matricula/email) o FK
         except IntegrityError as e:
             print(f"Error de integridad (posible duplicado o FK): {e}")
             self.db.rollback()
-            # Si quieres distinguir por código 1062, puedes parsear e.args
+
+            # Intentamos identificar qué campo causó el duplicado
+            msg = str(e).lower()
+            if "matricula" in msg:
+                return "duplicado_matricula"
+            if "email" in msg:
+                return "duplicado_email"
+            if "huella" in msg or "huella_digital" in msg:
+                return "duplicado_huella"
+
             return "duplicado"
+
         except Exception as e:
             print(f"Error general al registrar estudiante: {e}")
             self.db.rollback()
