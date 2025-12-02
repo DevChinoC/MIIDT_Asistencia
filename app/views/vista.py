@@ -19,7 +19,8 @@ from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
 from datetime import datetime
 from openpyxl import Workbook
 from openpyxl.utils.dataframe import dataframe_to_rows
-import tempfile, os, shutil
+import tempfile, os, shutil,time
+import socket
 import os, unicodedata, re
 from datetime import datetime
 import locale
@@ -3350,9 +3351,9 @@ class VentanaPrincipal:
         Genera y envía por correo un PDF individual a cada alumno (seleccionados o todos).
         Se ejecuta en un hilo secundario para no congelar la interfaz.
         """
-        import threading
-        import tempfile, shutil, time
-        from tkinter import messagebox
+        #import threading
+        #import tempfile, shutil, time
+        #from tkinter import messagebox
 
         # Aviso rápido (no bloqueante) de que empezó el envío
         if hasattr(self, "mostrar_notificacion_rapida"):
@@ -3373,11 +3374,32 @@ class VentanaPrincipal:
                         0,
                         lambda: messagebox.showerror(
                             "Correo no disponible",
-                            "No se encontró config.emailer.send_mail. Configura config/.env y config/emailer.py."
+                            "No se encontró config.emailer.send_mail."
+                            "Configura config/.env y config/emailer.py."
                         )
                     )
                     return
+                # --------- COMPROBAR CONEXIÓN A INTERNET ---------
+                def hay_internet(host="8.8.8.8", port=53, timeout=3):
+                    try:
+                        socket.setdefaulttimeout(timeout)
+                        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                        s.connect((host, port))
+                        s.close()
+                        return True
+                    except OSError:
+                        return False
 
+                if not hay_internet():
+                    self.ventana.after(
+                        0,
+                        lambda: messagebox.showerror(
+                            "Sin conexión a la red",
+                            "No hay conexión a Internet.\n"
+                            "Verifica tu red y vuelve a intentar enviar los reportes."
+                        )
+                    )
+                    return
                 # Validación de datos cargados
                 if not hasattr(self, "_tv_gen") or not hasattr(self, "_gen_row_meta"):
                     self.ventana.after(
