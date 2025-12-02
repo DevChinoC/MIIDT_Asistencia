@@ -645,7 +645,7 @@ class VentanaPrincipal:
         # Qué hacer cuando el usuario selecciona un estudiante del listado
         def _on_select_est_reg(item):
             # Abre directamente la ventana de edición del estudiante
-            self._editar_estudiante(item)
+            self._mostrar_estudiante_en_registro(item)
 
         # Entry con autocompletado
         self.entry_estudiante_registro = AutocompleteEntry(
@@ -941,6 +941,36 @@ class VentanaPrincipal:
             print(f"Error al cargar estudiantes: {e}")
             traceback.print_exc()
             self._mostrar_mensaje_sin_estudiantes()
+
+    def _mostrar_estudiante_en_registro(self, estudiante):
+        """
+        Muestra en Gestión de Estudiantes SOLO la tarjeta del estudiante buscado.
+        No abre el modal de edición.
+        """
+        try:
+            if not hasattr(self, "frame_estudiantes"):
+                return  # por si aún no se ha inicializado la UI
+
+            # Limpiar las tarjetas actuales
+            for widget in self.frame_estudiantes.winfo_children():
+                widget.destroy()
+
+            # Asegurarnos de tener un dict con los campos esperados
+            data = estudiante
+
+            # Actualizar la lista interna (por si luego quieres usarla)
+            self.lista_estudiantes = [data]
+
+            # Crear una única tarjeta (index 0)
+            self._crear_tarjeta_estudiante(self.frame_estudiantes, data, 0)
+
+            # Subir el scroll al inicio
+            if hasattr(self, "canvas_estudiantes"):
+                self.canvas_estudiantes.yview_moveto(0.0)
+
+        except Exception as e:
+            print(f"Error al mostrar estudiante en registro: {e}")
+            traceback.print_exc()
 
     def _mostrar_mensaje_sin_estudiantes(self):
         # Limpiar el frame de contenido
