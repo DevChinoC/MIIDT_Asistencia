@@ -621,6 +621,55 @@ class VentanaPrincipal:
         # Título
         tk.Label(parent, text="Gestión de Estudiantes", bg="lightblue", fg="#1a253c",
                 font=('Arial', 24, 'bold')).place(x=30, y=30)
+        
+        # === BARRA DE BÚSQUEDA (como reportes, pero sin botón) ===
+        frame_busqueda_reg = tk.Frame(parent, bg="lightblue")
+        frame_busqueda_reg.place(relx=0.5, y=70, height=40, anchor="n")
+
+        tk.Label(
+            frame_busqueda_reg,
+            text="Buscar estudiante:",
+            bg="lightblue",
+            fg="#1a253c",
+            font=('Arial', 12)
+        ).pack(side=tk.LEFT, padx=(0, 10))
+
+        # Función que consulta al controlador (igual que en reportes)
+        def _fetch_estudiantes_reg(q):
+            try:
+                return self.controlador.buscar_estudiantes(q, limit=20)
+            except Exception as e:
+                print("Error buscando estudiantes en Registro:", e)
+                return []
+
+        # Qué hacer cuando el usuario selecciona un estudiante del listado
+        def _on_select_est_reg(item):
+            # Abre directamente la ventana de edición del estudiante
+            self._editar_estudiante(item)
+
+        # Entry con autocompletado
+        self.entry_estudiante_registro = AutocompleteEntry(
+            frame_busqueda_reg,
+            fetch_callback=_fetch_estudiantes_reg,
+            on_select=_on_select_est_reg,
+            width=40
+        )
+        self.entry_estudiante_registro.pack(side=tk.LEFT)
+
+        # Placeholder opcional
+        self.entry_estudiante_registro.insert(0, "Nombre, matrícula o correo...")
+        self.entry_estudiante_registro.bind(
+            "<FocusIn>",
+            lambda e: self.entry_estudiante_registro.delete(0, "end")
+            if self.entry_estudiante_registro.get().startswith("Nombre")
+            else None
+        )
+
+        # Al presionar Enter -> buscar por texto (sin botón)
+        self.entry_estudiante_registro.bind(
+            "<Return>",
+            lambda e: self.buscar_estudiante_registro()
+        )
 
         # Botón "Nuevo Estudiante" con icono redimensionado y alineado a la izquierda del texto
         imagen_boton = Image.open(resource_path("public/static/icons/nueva-cuenta-white.png"))
@@ -660,6 +709,50 @@ class VentanaPrincipal:
             # Mostrar mensaje de carga o estado inicial
             self._mostrar_mensaje_sin_estudiantes()
 
+    def buscar_estudiante_registro(self):
+            """
+            Busca un estudiante desde la pestaña Registro y abre directamente
+            la ventana de edición. Funciona solo con Enter (no hay botón Buscar).
+            """
+            try:
+                # Cerrar popup del autocomplete si está abierto
+                try:
+                    if hasattr(self, "entry_estudiante_registro") and hasattr(self.entry_estudiante_registro, "close_popup"):
+                        self.entry_estudiante_registro.close_popup()
+                except Exception:
+                    pass
+
+                texto = (self.entry_estudiante_registro.get() or "").strip()
+                if not texto or texto.lower().startswith("nombre"):
+                    messagebox.showinfo(
+                        "Atención",
+                        "Escribe el nombre, matrícula o correo del estudiante."
+                    )
+                    return
+
+                # Buscar en la base de datos
+                resultados = self.controlador.buscar_estudiantes(texto, limit=10) or []
+
+                if len(resultados) == 0:
+                    messagebox.showinfo(
+                        "Sin resultados",
+                        f"No se encontró ningún estudiante para: “{texto}”."
+                    )
+                    return
+                elif len(resultados) == 1:
+                    seleccionado = resultados[0]
+                else:
+                    # Si hay varios, por simplicidad abrimos el primero.
+                    # (Si luego quieres, se puede hacer un dialogo para elegir uno.)
+                    seleccionado = resultados[0]
+
+                # Abrir directamente el modal de edición del estudiante encontrado
+                self._editar_estudiante(seleccionado)
+
+            except Exception as e:
+                print(f"Error al buscar estudiante en Registro: {e}")
+                traceback.print_exc()
+                messagebox.showerror("Error", f"No se pudo ejecutar la búsqueda:\n{e}")
 
     def _crear_tarjeta_estudiante(self, parent, estudiante, index):
         # Crear frame para la tarjeta
@@ -1290,6 +1383,8 @@ class VentanaPrincipal:
             id_asesor = self.asesores_data.get(nombre_asesor)
             area_conocimiento = combo_area.get().strip()
             carrera = entry_carrera.get().strip()
+            
+            
 
             # Validación básica
             if not all([
@@ -1303,6 +1398,17 @@ class VentanaPrincipal:
             if not matricula.isdigit():
                 messagebox.showerror("Error", "La matrícula debe contener solo números.")
                 return
+            
+            # ------------------ VALIDAR FORMATO DE CORREO ------------------  # 
+            patron_correo = r'^[\w\.-]+@[\w\.-]+\.\w+$'
+            if not re.match(patron_correo, email):
+                messagebox.showerror(
+                    "Correo inválido",
+                    "El correo no tiene un formato válido.\nEjemplo: usuario@dominio.com"
+                )
+                entry_email.focus_set()
+                return
+
 
             # Registrar y manejar duplicado
             res = self.controlador.registrar_estudiante(
@@ -1311,10 +1417,29 @@ class VentanaPrincipal:
                 carrera, nombre_asesor, id_asesor
             )
 
-            if res == "duplicado":
-                messagebox.showwarning("Duplicado", f"La matrícula {matricula} ya está registrada.")
+            if res in ("duplicado_matricula", "duplicado"):
+                messagebox.showwarning(
+                    "Matrícula duplicada",
+                    f"La matrícula {matricula} ya está registrada."
+                )
                 entry_matricula.focus_set()
                 return
+
+            elif res == "duplicado_email":
+                messagebox.showwarning(
+                    "Correo ya registrado",
+                    f"El correo {email} ya está registrado para otro estudiante."
+                )
+                entry_email.focus_set()
+                return
+
+            elif res == "duplicado_huella":
+                messagebox.showwarning(
+                    "Huella ya registrada",
+                    "La huella capturada ya está asociada a otro estudiante."
+                )
+                return
+
             elif res is True:
                 messagebox.showinfo(
                     "Estudiante registrado",
@@ -1327,10 +1452,15 @@ class VentanaPrincipal:
                     f"Carrera: {carrera}"
                 )
                 self._cargar_estudiantes_en_vista()
-                self.cargar_estudiantes_reportes()
+                # self.cargar_estudiantes_reportes()  ← la vemos en el siguiente punto
                 modal.destroy()
+
             else:
-                messagebox.showerror("Error", "Error: huella y/o email ya resgitrados.")
+                messagebox.showerror(
+                    "Error",
+                    "Ocurrió un error al registrar al estudiante."
+                )
+
 
         # --------------------------
         # Botón registrar
