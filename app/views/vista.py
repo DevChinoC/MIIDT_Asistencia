@@ -366,15 +366,31 @@ class VentanaPrincipal:
             self._abrir_panel_administracion()
 
 
-
+   #---------Apartado de login----------#
+   
     def _abrir_panel_admin_guardado(self):
         """Si no hay sesión admin, pide login. Si la hay, abre panel."""
         if not self._admin_logged:
             if not self._login_admin():
                 return
         self._abrir_panel_administracion()
-
     def _login_admin(self) -> bool:
+        """
+        Pregunta si quieres iniciar sesión de administrador con HUELLADIGITAL
+        o con USUARIO/CONTRASEÑA y llama al método correspondiente.
+        """
+        usar_huella = messagebox.askyesno(
+            "Inicio de sesión - Administración",
+            "¿Quieres iniciar sesión como administrador usando la huella digital?\n\n"
+            "Sí = Huella del administrador\nNo = Usuario y contraseña"
+        )
+
+        if usar_huella:
+            return self._login_admin_huella()
+        else:
+            return self._login_admin_user_pass()
+
+    def _login_admin_user_pass(self) -> bool:
         """Pide usuario/contraseña y valida contra .env (bcrypt). Re-lee .env por si cambió."""
         try:
             # Releer .env en cada intento
@@ -382,7 +398,6 @@ class VentanaPrincipal:
         except Exception:
             pass
 
-        # Normalizar env (quitar espacios y comillas accidentales)
         u_env = (os.getenv("ADMIN_USER") or "").strip().strip('"').strip("'")
         h_env = (os.getenv("ADMIN_PASS_HASH") or "").strip().strip('"').strip("'")
 
@@ -408,18 +423,67 @@ class VentanaPrincipal:
             return False
 
         if ok_user and ok_pass:
-            # guarda en atributos (por si se usan en runtime)
             self._admin_user = u_env
             self._admin_pass_hash = h_env
             self._admin_logged = True
             return True
 
-        # Mensaje más específico para depuración
         if not ok_user:
             messagebox.showerror("Acceso denegado", "Usuario incorrecto.")
         else:
             messagebox.showerror("Acceso denegado", "Contraseña incorrecta.")
         return False
+    
+    def _login_admin_huella(self) -> bool:
+        """
+        Inicia sesión de administrador usando la huella registrada en admin_config.
+        NO usa las huellas de alumnos.
+        """
+        try:
+            template = self.controlador.obtener_huella_admin()
+            if not template:
+                messagebox.showwarning(
+                    "Sin huella de admin",
+                    "No hay una huella de administrador registrada.\n"
+                    "Regístrala desde el Panel de Administración."
+                )
+                return False
+
+            # Armamos una "persona" ficticia para reutilizar verify_fingerprint
+            admin_persona = {
+                "id": -1,
+                "nombre": "Administrador",
+                "apellido_paterno": "",
+                "apellido_materno": "",
+                "huella_digital": template,
+            }
+            personas = [admin_persona]
+
+            matching = self.interface_api.verify_fingerprint(personas)
+
+            if not matching:
+                messagebox.showerror(
+                    "Acceso denegado",
+                    "Huella de administrador no reconocida."
+                )
+                return False
+
+            # Si llega aquí, asumimos que la huella coincide
+            self._admin_logged = True
+            self._admin_user = "admin_huella"
+            messagebox.showinfo(
+                "Acceso concedido",
+                "Sesión de administrador iniciada con huella digital."
+            )
+            return True
+
+        except Exception as e:
+            traceback.print_exc()
+            messagebox.showerror(
+                "Error",
+                f"No fue posible iniciar sesión con huella de administrador:\n{e}"
+            )
+            return False
 
     def _cerrar_sesion_admin(self):
         """Cierra sesión y destruye el panel admin si está abierto. NO toca las credenciales."""
@@ -469,6 +533,16 @@ class VentanaPrincipal:
                         on_close()
                     except Exception:
                         pass
+            tk.Button(
+                header,
+                text="Registrar huella admin",
+                bg="#2563eb",
+                fg="white",
+                font=("Arial", 10, "bold"),
+                relief="flat",
+                cursor="hand2",
+                command=self._solicitar_huella_admin_segura
+            ).pack(side="right", padx=6)
 
             tk.Button(header, text="Cerrar sesión", bg="#ef4444", fg="white",
                     font=("Arial", 10, "bold"), relief="flat", cursor="hand2",
@@ -538,7 +612,193 @@ class VentanaPrincipal:
 
         _render(top, on_close=_on_close)
         top.protocol("WM_DELETE_WINDOW", _on_close)
+   
+    def _validar_credenciales_admin_para_huella(self) -> bool:
+        """
+        Pide usuario y contraseña del administrador y valida contra .env
+        antes de permitir registrar la huella de administrador.
+        """
+        try:
+            # Releer .env por seguridad
+            try:
+                load_dotenv(os.path.abspath(ENV_PATH), override=True)
+            except:
+                pass
 
+            user_env = (os.getenv("ADMIN_USER") or "").strip()
+            pass_env = (os.getenv("ADMIN_PASS_HASH") or "").strip()
+
+            if not user_env or not pass_env:
+                messagebox.showerror(
+                    "Error de configuración",
+                    "ADMIN_USER o ADMIN_PASS_HASH no están configurados en .env"
+                )
+                return False
+
+            user = simpledialog.askstring("Confirmación", "Usuario administrador:", parent=self.ventana)
+            if user is None:
+                return False
+
+            pwd = simpledialog.askstring("Confirmación", "Contraseña:", parent=self.ventana, show="*")
+            if pwd is None:
+                return False
+
+            if user.strip().lower() != user_env.lower():
+                messagebox.showerror("Acceso denegado", "Usuario incorrecto.")
+                return False
+
+            try:
+                valido = bcrypt.checkpw(pwd.encode(), pass_env.encode())
+            except:
+                messagebox.showerror("Error", "No se pudo validar la contraseña.")
+                return False
+
+            if not valido:
+                messagebox.showerror("Acceso denegado", "Contraseña incorrecta.")
+                return False
+
+            return True
+
+        except Exception as e:
+            messagebox.showerror("Error", f"No se pudo validar el acceso:\n{e}")
+            return False
+    
+    def _abrir_modal_huella_admin(self):
+            """
+            Abre un modal para registrar (o reemplazar) la huella del administrador.
+            Usa self.interface_api.register_fingerprint como con los estudiantes.
+            """
+            modal = tk.Toplevel(self.ventana)
+            modal.title("Registrar huella del administrador")
+            modal.geometry("500x300")
+            modal.transient(self.ventana)
+            modal.grab_set()
+
+            # Centrar
+            modal.update_idletasks()
+            ancho, alto = 500, 300
+            x = (modal.winfo_screenwidth() // 2) - (ancho // 2)
+            y = (modal.winfo_screenheight() // 2) - (alto // 2)
+            modal.geometry(f"{ancho}x{alto}+{x}+{y}")
+
+            frame = tk.Frame(modal, bg="#f3f4f6")
+            frame.pack(fill="both", expand=True, padx=20, pady=20)
+
+            tk.Label(
+                frame,
+                text="Registrar / actualizar huella del administrador",
+                bg="#f3f4f6",
+                font=("Arial", 12, "bold")
+            ).pack(pady=(0, 15))
+
+            # Botón de escanear
+            icono_huella = None
+            try:
+                img = Image.open(resource_path("public/static/icons/huella-dactilar.png"))
+                img = img.resize((20, 20), Image.LANCZOS)
+                icono_huella = ImageTk.PhotoImage(img)
+            except Exception:
+                pass
+
+            btn_escanear = tk.Button(
+                frame,
+                text=" Escanear huella del administrador ",
+                font=("Arial", 11, "bold"),
+                relief="raised",
+                image=icono_huella,
+                compound="left" if icono_huella else None,
+                padx=10, pady=5,
+                cursor="hand2"
+            )
+            btn_escanear.image = icono_huella
+            btn_escanear.pack(pady=(0, 10))
+
+            lbl_estado = tk.Label(
+                frame,
+                text="Esperando huella...",
+                bg="#f3f4f6",
+                font=("Arial", 11),
+                fg="blue"
+            )
+            lbl_estado.pack(pady=(0, 10))
+
+            huella_admin = None
+
+            def finalizar_escaneo():
+                lbl_estado.config(text="Huella capturada", fg="green")
+                btn_escanear.config(state="normal")
+
+            def on_enroll(finger_idx, template):
+                nonlocal huella_admin
+                huella_admin = template
+                finalizar_escaneo()
+                print(f"[ADMIN] Huella {finger_idx} registrada. Tamaño: {len(template)} bytes")
+
+            btn_escanear.config(
+                command=lambda: self.interface_api.register_fingerprint(on_enroll=on_enroll)
+            )
+
+            # Botones Guardar / Cancelar
+            btn_frame = tk.Frame(frame, bg="#f3f4f6")
+            btn_frame.pack(pady=(20, 0))
+
+            def guardar_huella_admin():
+                if not huella_admin:
+                    messagebox.showwarning(
+                        "Sin huella",
+                        "Primero escanea la huella del administrador."
+                    )
+                    return
+
+                ok = self.controlador.guardar_huella_admin(huella_admin)
+                if ok:
+                    messagebox.showinfo(
+                        "Huella guardada",
+                        "La huella del administrador se ha registrado correctamente."
+                    )
+                    modal.destroy()
+                else:
+                    messagebox.showerror(
+                        "Error",
+                        "No se pudo guardar la huella del administrador."
+                    )
+
+            tk.Button(
+                btn_frame,
+                text="Guardar",
+                bg="#16a34a",
+                fg="white",
+                font=("Arial", 11, "bold"),
+                relief="flat",
+                cursor="hand2",
+                command=guardar_huella_admin,
+                width=12
+            ).pack(side="left", padx=5)
+
+            tk.Button(
+                btn_frame,
+                text="Cancelar",
+                bg="#ef4444",
+                fg="white",
+                font=("Arial", 11, "bold"),
+                relief="flat",
+                cursor="hand2",
+                command=modal.destroy,
+                width=12
+            ).pack(side="left", padx=5)
+    
+    def _solicitar_huella_admin_segura(self):
+        """
+        Antes de abrir el modal de registrar huella admin,
+        pide usuario y contraseña. Si no son correctos, no deja continuar.
+        """
+        if not self._validar_credenciales_admin_para_huella():
+            return
+        
+        # Si el login fue exitoso → abrir modal para registrar huella
+        self._abrir_modal_huella_admin()
+
+  #---------------------------------------#
 
     def _inicializar_ui_estudiantes(self):
         """
