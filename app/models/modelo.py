@@ -949,5 +949,47 @@ class Modelo:
             print(f"Error al buscar estudiantes: {e}")
             return []
 
+    # ========================
+    # HUELLA DEL ADMINISTRADOR
+    # ========================
+
+    def guardar_huella_admin(self, template: bytes) -> bool:
+        """
+        Guarda (o reemplaza) la huella del administrador en admin_config.
+        Siempre deja una sola fila.
+        """
+        try:
+            ahora = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
+
+            # Borramos cualquier huella anterior para dejar solo una
+            self.cursor.execute("DELETE FROM admin_config")
+
+            self.cursor.execute(
+                """
+                INSERT INTO admin_config (huella_admin, created_at, updated_at)
+                VALUES (%s, %s, %s)
+                """,
+                (template, ahora, ahora)
+            )
+            self.db.commit()
+            return True
+        except Exception as e:
+            print(f"Error al guardar huella admin: {e}")
+            self.db.rollback()
+            return False
+
+    def obtener_huella_admin(self) -> Optional[bytes]:
+        """
+        Devuelve la huella del administrador (bytes) o None si no hay.
+        """
+        try:
+            self.cursor.execute(
+                "SELECT huella_admin FROM admin_config ORDER BY id DESC LIMIT 1"
+            )
+            row = self.cursor.fetchone()
+            return row[0] if row else None
+        except Exception as e:
+            print(f"Error al obtener huella admin: {e}")
+            return None
 
  
