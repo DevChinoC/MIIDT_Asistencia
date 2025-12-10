@@ -13,7 +13,6 @@ from pdf2image import convert_from_path
 from PIL import Image
 from fpdf.enums import AccessPermission  
 import traceback, openpyxl, threading, locale
-from openpyxl.utils import get_column_letter
 from collections import defaultdict
 from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
 from datetime import datetime
@@ -25,6 +24,9 @@ import os, unicodedata, re
 from datetime import datetime
 import locale
 import traceback
+from openpyxl.styles import Font, PatternFill, Border, Side, Alignment, Protection
+from openpyxl.utils import get_column_letter
+from openpyxl.workbook.protection import WorkbookProtection
 
 # ===========================================================
 # Carga de .env y rutas de recursos (normal + PyInstaller)
@@ -3326,8 +3328,7 @@ class VentanaPrincipal:
                 # ------------------ EXPORTAR SEGÚN EXTENSIÓN ------------------
                 try:
                     if file_path.lower().endswith(".pdf"):
-                        # PDF individual
-                        # Enriquecemos meta con estadisticas para que el PDF tenga historial + incidencias
+                        # PDF individual (meta enriquecido con estadísticas)
                         meta_con_estad = dict(meta)
                         meta_con_estad["estad"] = estadisticas
                         self._generar_pdf_alumno(meta_con_estad, dest_path=file_path)
@@ -3391,7 +3392,7 @@ class VentanaPrincipal:
                             ws[f"A{row_idx}"].alignment = alignment
                             ws[f"B{row_idx}"].alignment = alignment
 
-                        # 3. Estadísticas
+                        # 3. Estadísticas (todas como texto HH:MM:SS)
                         ws.append([])  # espacio
                         stats_title_row = 11
                         ws.merge_cells(f"A{stats_title_row}:B{stats_title_row}")
@@ -3403,10 +3404,10 @@ class VentanaPrincipal:
                         ws[f"B{stats_title_row}"].border = border
 
                         estadisticas_data = [
-                            ["Promedio semanal (hrs):", float(estadisticas.get("promedio_semanal", 0))],
-                            ["Promedio mensual (hrs):", float(estadisticas.get("promedio_mensual", 0))],
-                            ["Hora más frecuente de entrada:", estadisticas.get("hora_entrada_frecuente", "--:--")],
-                            ["Hora más frecuente de salida:", estadisticas.get("hora_salida_frecuente", "--:--")]
+                            ["Promedio semanal (hrs):",   estadisticas.get("promedio_semanal", "00:00:00")],
+                            ["Promedio mensual (hrs):",   estadisticas.get("promedio_mensual", "00:00:00")],
+                            ["Hora más frecuente de entrada:", estadisticas.get("hora_entrada_frecuente", "--:--:--")],
+                            ["Hora más frecuente de salida:",  estadisticas.get("hora_salida_frecuente", "--:--:--")],
                         ]
 
                         start_row = stats_title_row + 1
@@ -3419,13 +3420,12 @@ class VentanaPrincipal:
                             ws[f"B{row_idx}"].border = border
                             ws[f"A{row_idx}"].alignment = alignment
                             ws[f"B{row_idx}"].alignment = alignment
-                            if isinstance(row_data[1], (int, float)):
-                                ws[f"B{row_idx}"].number_format = "0.00"
+                            # ya NO aplicamos number_format, vienen como texto HH:MM:SS
 
                         # 4. Historial detallado (CON INCIDENCIAS)
                         ws.append([])
                         titulo_historial_row = ws.max_row + 1
-                        # ahora el historial usa 5 columnas (A..E)
+                        # historial usa 5 columnas (A..E)
                         ws.merge_cells(
                             start_row=titulo_historial_row,
                             start_column=1,
@@ -3457,23 +3457,23 @@ class VentanaPrincipal:
                             for reg in historial:
                                 row = [
                                     reg.get("fecha", "--/--/----"),
-                                    reg.get("hora_entrada", "--:--"),
-                                    reg.get("hora_salida", "--:--"),
-                                    float(reg.get("horas_presentes", 0)),
-                                    reg.get("motivo_incidencia", ""),  # motivo seleccionado en incidencias
+                                    reg.get("hora_entrada", "--:--:--"),
+                                    reg.get("hora_salida", "--:--:--"),
+                                    reg.get("horas_presentes", "00:00:00"),  # ya viene HH:MM:SS
+                                    reg.get("motivo_incidencia", ""),        # motivo seleccionado en incidencias
                                 ]
                                 ws.append(row)
                         else:
-                            ws.append(["--/--/----", "--:--", "--:--", 0.0, ""])
+                            ws.append(["--/--/----", "--:--:--", "--:--:--", "00:00:00", ""])
 
-                        # Bordes + formato + color en incidencias
+                        # Bordes + formato + color en salidas manuales
+                        from openpyxl.styles import PatternFill
+
                         for row_idx in range(header_row + 1, ws.max_row + 1):
                             for col_idx in range(1, 6):
                                 cell = ws.cell(row=row_idx, column=col_idx)
                                 cell.border = border
                                 cell.alignment = alignment
-                                if col_idx == 4 and isinstance(cell.value, (int, float)):
-                                    cell.number_format = '0.00'
 
                             # Columna 5 = Incidencia → si tiene texto, pintamos SOLO la celda de Hora de salida (col 3)
                             cell_inc = ws.cell(row=row_idx, column=5)
@@ -4193,9 +4193,8 @@ class VentanaPrincipal:
                     messagebox.showerror("Error", f"No se pudo generar el PDF:\n{e}")
 
             def _exportar_excel_core():
-                from openpyxl.styles import Font, PatternFill, Border, Side, Alignment, Protection
-                from openpyxl.utils import get_column_letter
-                from openpyxl.workbook.protection import WorkbookProtection
+                
+              
 
                 nombre_sugerido = f"reporte_{estudiante.get('matricula','nombre')}_{seleccion}.xlsx".replace(" ", "_")
                 ruta_xls = filedialog.asksaveasfilename(
@@ -4216,10 +4215,12 @@ class VentanaPrincipal:
                 header_fill = PatternFill(start_color="4F81BD", end_color="4F81BD", fill_type="solid")
                 subheader_font = Font(bold=True, color="000000", size=11)
                 subheader_fill = PatternFill(start_color="DCE6F1", end_color="DCE6F1", fill_type="solid")
-                border = Border(left=Side(style='thin'),
-                                right=Side(style='thin'),
-                                top=Side(style='thin'),
-                                bottom=Side(style='thin'))
+                border = Border(
+                    left=Side(style='thin'),
+                    right=Side(style='thin'),
+                    top=Side(style='thin'),
+                    bottom=Side(style='thin')
+                )
                 alignment = Alignment(horizontal="left", vertical="center")
 
                 # 1. ENCABEZADO
@@ -4258,7 +4259,7 @@ class VentanaPrincipal:
                     ws[f'A{row}'].alignment = alignment
                     ws[f'B{row}'].alignment = alignment
 
-                # 3. ESTADÍSTICAS
+                # 3. ESTADÍSTICAS (HH:MM:SS como texto)
                 ws.append([])
                 ws.merge_cells('A11:B11')
                 ws['A11'] = "ESTADÍSTICAS DE ASISTENCIA"
@@ -4269,10 +4270,10 @@ class VentanaPrincipal:
                 ws['B11'].border = border
 
                 estadisticas_data = [
-                    ["Promedio semanal (hrs):", float(estadisticas.get('promedio_semanal', 0))],
-                    ["Promedio mensual (hrs):", float(estadisticas.get('promedio_mensual', 0))],
-                    ["Hora más frecuente de entrada:", estadisticas.get('hora_entrada_frecuente', '--:--')],
-                    ["Hora más frecuente de salida:", estadisticas.get('hora_salida_frecuente', '--:--')]
+                    ["Promedio semanal (hrs):",   estadisticas.get('promedio_semanal', "00:00:00")],
+                    ["Promedio mensual (hrs):",   estadisticas.get('promedio_mensual', "00:00:00")],
+                    ["Hora más frecuente de entrada:", estadisticas.get('hora_entrada_frecuente', '--:--:--')],
+                    ["Hora más frecuente de salida:",  estadisticas.get('hora_salida_frecuente', '--:--:--')]
                 ]
 
                 start_row = ws.max_row + 1
@@ -4285,8 +4286,7 @@ class VentanaPrincipal:
                     ws[f'B{row_idx}'].border = border
                     ws[f'A{row_idx}'].alignment = alignment
                     ws[f'B{row_idx}'].alignment = alignment
-                    if isinstance(row_data[1], (int, float)):
-                        ws[f'B{row_idx}'].number_format = '0.00'
+                    # ya no se usa number_format, son strings HH:MM:SS
 
                 # 4. HISTORIAL (CON INCIDENCIAS)
                 ws.append([])
@@ -4322,23 +4322,21 @@ class VentanaPrincipal:
                     for reg in historial:
                         row = [
                             reg.get('fecha', '--/--/----'),
-                            reg.get('hora_entrada', '--:--'),
-                            reg.get('hora_salida', '--:--'),
-                            float(reg.get('horas_presentes', 0)),
-                            reg.get('motivo_incidencia', "")  # motivo de incidencia
+                            reg.get('hora_entrada', '--:--:--'),
+                            reg.get('hora_salida', '--:--:--'),
+                            reg.get('horas_presentes', '00:00:00'),   # HH:MM:SS
+                            reg.get('motivo_incidencia', "")          # motivo de incidencia
                         ]
                         ws.append(row)
                 else:
-                    ws.append(["--/--/----", "--:--", "--:--", 0.0, ""])
+                    ws.append(["--/--/----", "--:--:--", "--:--:--", "00:00:00", ""])
 
-                # Formato filas + resaltar incidencias
+                # Formato filas + resaltar solo la celda de hora de salida cuando hay incidencia
                 for row_idx in range(header_row + 1, ws.max_row + 1):
                     for col_idx in range(1, 6):
                         cell = ws.cell(row=row_idx, column=col_idx)
                         cell.border = border
                         cell.alignment = alignment
-                        if col_idx == 4 and isinstance(cell.value, (int, float)):
-                            cell.number_format = '0.00'
 
                     # Columna 5 = Incidencia → si tiene texto, pintamos SOLO la celda de Hora de salida (col 3)
                     cell_inc = ws.cell(row=row_idx, column=5)
@@ -4350,8 +4348,7 @@ class VentanaPrincipal:
                             fill_type="solid"
                         )
 
-
-                # LEYENDA MOTIVOS
+                # 5. LEYENDA MOTIVOS
                 leyenda_row = ws.max_row + 2
                 ws.merge_cells(
                     start_row=leyenda_row,

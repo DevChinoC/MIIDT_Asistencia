@@ -500,22 +500,37 @@ class Modelo:
     def obtener_estadisticas_estudiante(self, estudiante_id, mes=None, anio=None, fecha_inicio=None, fecha_fin=None):
         """
         Obtiene las estadísticas de un estudiante.
+
+        - TODAS las horas se formatean como HH:MM:SS.
         - Las horas diarias se TOPAN a 8.00 para efectos de reporte.
-        - Ahora incluye motivo_incidencia y fecha_modificacion para el reporte.
+        - Devuelve historial con motivo_incidencia y fecha_modificacion.
         """
         try:
+            from datetime import datetime
+
+            def horas_a_hms(horas_float: float) -> str:
+                """Convierte horas decimales a 'HH:MM:SS'."""
+                try:
+                    total_seg = int(round(float(horas_float) * 3600))
+                except (ValueError, TypeError):
+                    total_seg = 0
+                h = total_seg // 3600
+                m = (total_seg % 3600) // 60
+                s = total_seg % 60
+                return f"{h:02d}:{m:02d}:{s:02d}"
+
             # Consulta base
             query = """
                 SELECT 
-                    asistencia as fecha,
+                    asistencia AS fecha,
                     CASE 
                         WHEN hora_entrada IS NOT NULL THEN hora_entrada
                         ELSE NULL
-                    END as hora_entrada,
+                    END AS hora_entrada,
                     CASE 
                         WHEN hora_salida IS NOT NULL THEN hora_salida
                         ELSE NULL
-                    END as hora_salida,
+                    END AS hora_salida,
                     CASE
                         WHEN hora_entrada IS NOT NULL AND hora_salida IS NOT NULL
                         THEN TIME_TO_SEC(TIMEDIFF(hora_salida, hora_entrada)) / 3600.0
@@ -523,7 +538,7 @@ class Modelo:
                     END AS horas_presentes,
                     motivo_incidencia,
                     fecha_modificacion
-                FROM registro_asistencias 
+                FROM registro_asistencias
                 WHERE alumno_id = %s
             """
 
@@ -544,102 +559,101 @@ class Modelo:
 
             query += " ORDER BY fecha DESC"
 
-            print(f"Ejecutando consulta SQL con parámetros: {params}")
             self.cursor.execute(query, params)
             historial = self.cursor.fetchall()
-            print(f"Historial obtenido ({type(historial)}): {historial}")
 
             historial_dicts = []
             horas_entrada = []
             horas_salida = []
             horas_semanales = {}
             horas_mensuales = {}
-            total_horas_periodo = 0.0   # suma total de horas (ya topadas a 8)
-
-            from datetime import datetime
+            total_horas_periodo = 0.0   # suma en horas (ya topadas)
 
             for reg in historial:
                 try:
-                    # Valores crudos (OJO: índices cambiaron al agregar columnas)
                     fecha_raw         = reg[0]
                     hora_ent_raw      = reg[1]
                     hora_sal_raw      = reg[2]
                     horas_raw         = reg[3]
-                    motivo_raw        = reg[4]  # nuevo
-                    fecha_mod_raw     = reg[5]  # nuevo
+                    motivo_raw        = reg[4]
+                    fecha_mod_raw     = reg[5]
 
-                    # Formateo básico
+                    # ----- Fecha -----
                     fecha = '--/--/----'
-                    hora_entrada = '--:--'
-                    hora_salida = '--:--'
-
                     if fecha_raw:
                         if hasattr(fecha_raw, 'strftime'):
                             fecha = fecha_raw.strftime('%d/%m/%Y')
                         else:
                             fecha = str(fecha_raw)
 
+                    # ----- Hora entrada HH:MM:SS -----
+                    hora_entrada = '--:--:--'
                     if hora_ent_raw:
                         if hasattr(hora_ent_raw, 'strftime'):
-                            hora_entrada = hora_ent_raw.strftime('%H:%M')
+                            hora_entrada = hora_ent_raw.strftime('%H:%M:%S')
                         else:
-                            hora_entrada = str(hora_ent_raw)
+                            try:
+                                dt = datetime.strptime(str(hora_ent_raw), '%H:%M:%S')
+                                hora_entrada = dt.strftime('%H:%M:%S')
+                            except Exception:
+                                hora_entrada = str(hora_ent_raw)
 
+                    # ----- Hora salida HH:MM:SS -----
+                    hora_salida = '--:--:--'
                     if hora_sal_raw:
                         if hasattr(hora_sal_raw, 'strftime'):
-                            hora_salida = hora_sal_raw.strftime('%H:%M')
+                            hora_salida = hora_sal_raw.strftime('%H:%M:%S')
                         else:
-                            hora_salida = str(hora_sal_raw)
+                            try:
+                                dt = datetime.strptime(str(hora_sal_raw), '%H:%M:%S')
+                                hora_salida = dt.strftime('%H:%M:%S')
+                            except Exception:
+                                hora_salida = str(hora_sal_raw)
 
                     # ====== TOPAR HORAS DIARIAS A 8.00 ======
-                    horas_presentes = '0.00'
                     horas_val = 0.0
                     if horas_raw is not None:
                         try:
                             horas_val = float(horas_raw)
                         except (ValueError, TypeError):
                             horas_val = 0.0
-
                         if horas_val > 8.0:
                             horas_val = 8.0
 
-                        horas_presentes = f"{horas_val:.2f}"
+                    horas_presentes_str = horas_a_hms(horas_val)
 
-                    # === Motivo / fecha modificación (para incidencias) ===
-                    motivo_txt = ""
-                    if motivo_raw:
-                        motivo_txt = str(motivo_raw).strip()
-
+                    # Motivo / fecha modificación
+                    motivo_txt = str(motivo_raw).strip() if motivo_raw else ""
                     fecha_mod_txt = ""
                     if fecha_mod_raw:
                         try:
                             if hasattr(fecha_mod_raw, "strftime"):
-                                fecha_mod_txt = fecha_mod_raw.strftime("%d/%m/%Y %H:%M")
+                                fecha_mod_txt = fecha_mod_raw.strftime("%d/%m/%Y %H:%M:%S")
                             else:
                                 fecha_mod_txt = str(fecha_mod_raw)
                         except Exception:
                             fecha_mod_txt = str(fecha_mod_raw)
 
-                    # Registro para historial (lo que usa el PDF/Excel)
+                    # Registro para historial
                     historial_dicts.append({
                         "fecha": fecha,
                         "hora_entrada": hora_entrada,
                         "hora_salida": hora_salida,
-                        "horas_presentes": horas_presentes,
+                        "horas_presentes": horas_presentes_str,   # HH:MM:SS
                         "motivo_incidencia": motivo_txt,
                         "fecha_modificacion": fecha_mod_txt,
                     })
 
-                    # Acumular totales
+                    # Acumular totales en horas
                     total_horas_periodo += horas_val
 
-                    # Recolectar para horas frecuentes
-                    if hora_entrada != '--:--':
+                    # Horas frecuentes
+                    if hora_entrada != '--:--:--':
                         horas_entrada.append(hora_entrada)
-                    if hora_salida != '--:--':
+                    if hora_salida != '--:--:--':
                         horas_salida.append(hora_salida)
 
-                    # Calcular semana y mes para promedios, usando la fecha real
+                    # Semanas / meses para promedios
                     if fecha_raw:
                         try:
                             if isinstance(fecha_raw, str):
@@ -649,8 +663,10 @@ class Modelo:
                                     fecha_dt = datetime.strptime(fecha_raw, '%Y-%m-%d %H:%M:%S')
                             else:
                                 if hasattr(fecha_raw, 'date'):
-                                    fecha_dt = datetime.combine(fecha_raw, datetime.min.time()) \
-                                        if not hasattr(fecha_raw, 'hour') else fecha_raw
+                                    if not hasattr(fecha_raw, 'hour'):
+                                        fecha_dt = datetime.combine(fecha_raw, datetime.min.time())
+                                    else:
+                                        fecha_dt = fecha_raw
                                 else:
                                     fecha_dt = datetime.strptime(str(fecha_raw), '%Y-%m-%d')
 
@@ -670,30 +686,35 @@ class Modelo:
                     traceback.print_exc()
                     continue
 
-            # Calcular promedios (con horas ya topadas)
-            promedio_semanal = sum(horas_semanales.values()) / len(horas_semanales) if horas_semanales else 0.0
-            promedio_mensual = sum(horas_mensuales.values()) / len(horas_mensuales) if horas_mensuales else 0.0
+            # Promedios (en horas decimales primero)
+            promedio_semanal_h = sum(horas_semanales.values()) / len(horas_semanales) if horas_semanales else 0.0
+            promedio_mensual_h = sum(horas_mensuales.values()) / len(horas_mensuales) if horas_mensuales else 0.0
 
-            # Hora más frecuente
+            # Convertir totales y promedios a HH:MM:SS
+            total_horas_str   = horas_a_hms(total_horas_periodo)
+            prom_semanal_str  = horas_a_hms(promedio_semanal_h)
+            prom_mensual_str  = horas_a_hms(promedio_mensual_h)
+
+            # Hora más frecuente de entrada/salida
             def hora_mas_frecuente(lista_horas):
                 if not lista_horas:
-                    return '--:--'
+                    return '--:--:--'
                 conteo = {}
                 for h in lista_horas:
                     conteo[h] = conteo.get(h, 0) + 1
                 return max(conteo.items(), key=lambda x: x[1])[0]
 
             hora_entrada_frec = hora_mas_frecuente(horas_entrada)
-            hora_salida_frec = hora_mas_frecuente(horas_salida)
+            hora_salida_frec  = hora_mas_frecuente(horas_salida)
 
             return {
-                'promedio_semanal': f"{promedio_semanal:.2f}",
-                'promedio_mensual': f"{promedio_mensual:.2f}",
-                'total_horas_periodo': f"{total_horas_periodo:.2f}",
-                'total_horas_mes': f"{total_horas_periodo:.2f}",  # compatibilidad con PDFs
-                'hora_entrada_frecuente': hora_entrada_frec,
-                'hora_salida_frecuente': hora_salida_frec,
-                'historial': historial_dicts
+                "promedio_semanal": prom_semanal_str,     # HH:MM:SS
+                "promedio_mensual": prom_mensual_str,     # HH:MM:SS
+                "total_horas_periodo": total_horas_str,   # HH:MM:SS
+                "total_horas_mes": total_horas_str,       # compatibilidad
+                "hora_entrada_frecuente": hora_entrada_frec,
+                "hora_salida_frecuente": hora_salida_frec,
+                "historial": historial_dicts,
             }
 
         except Exception as e:
@@ -701,13 +722,13 @@ class Modelo:
             import traceback
             traceback.print_exc()
             return {
-                'promedio_semanal': '0.00',
-                'promedio_mensual': '0.00',
-                'total_horas_periodo': '0.00',
-                'total_horas_mes': '0.00',
-                'hora_entrada_frecuente': '--:--',
-                'hora_salida_frecuente': '--:--',
-                'historial': []
+                "promedio_semanal": "00:00:00",
+                "promedio_mensual": "00:00:00",
+                "total_horas_periodo": "00:00:00",
+                "total_horas_mes": "00:00:00",
+                "hora_entrada_frecuente": "--:--:--",
+                "hora_salida_frecuente": "--:--:--",
+                "historial": [],
             }
 
 
