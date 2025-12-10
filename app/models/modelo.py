@@ -501,6 +501,7 @@ class Modelo:
         """
         Obtiene las estadísticas de un estudiante.
         - Las horas diarias se TOPAN a 8.00 para efectos de reporte.
+        - Ahora incluye motivo_incidencia y fecha_modificacion para el reporte.
         """
         try:
             # Consulta base
@@ -519,7 +520,9 @@ class Modelo:
                         WHEN hora_entrada IS NOT NULL AND hora_salida IS NOT NULL
                         THEN TIME_TO_SEC(TIMEDIFF(hora_salida, hora_entrada)) / 3600.0
                         ELSE 0
-                    END AS horas_presentes
+                    END AS horas_presentes,
+                    motivo_incidencia,
+                    fecha_modificacion
                 FROM registro_asistencias 
                 WHERE alumno_id = %s
             """
@@ -557,11 +560,13 @@ class Modelo:
 
             for reg in historial:
                 try:
-                    # Valores crudos
-                    fecha_raw = reg[0]
-                    hora_ent_raw = reg[1]
-                    hora_sal_raw = reg[2]
-                    horas_raw = reg[3]
+                    # Valores crudos (OJO: índices cambiaron al agregar columnas)
+                    fecha_raw         = reg[0]
+                    hora_ent_raw      = reg[1]
+                    hora_sal_raw      = reg[2]
+                    horas_raw         = reg[3]
+                    motivo_raw        = reg[4]  # nuevo
+                    fecha_mod_raw     = reg[5]  # nuevo
 
                     # Formateo básico
                     fecha = '--/--/----'
@@ -595,18 +600,34 @@ class Modelo:
                         except (ValueError, TypeError):
                             horas_val = 0.0
 
-                        # 🔴 AQUI SE LIMITA: máximo 8 horas por día
                         if horas_val > 8.0:
                             horas_val = 8.0
 
                         horas_presentes = f"{horas_val:.2f}"
 
-                    # Registro para historial
+                    # === Motivo / fecha modificación (para incidencias) ===
+                    motivo_txt = ""
+                    if motivo_raw:
+                        motivo_txt = str(motivo_raw).strip()
+
+                    fecha_mod_txt = ""
+                    if fecha_mod_raw:
+                        try:
+                            if hasattr(fecha_mod_raw, "strftime"):
+                                fecha_mod_txt = fecha_mod_raw.strftime("%d/%m/%Y %H:%M")
+                            else:
+                                fecha_mod_txt = str(fecha_mod_raw)
+                        except Exception:
+                            fecha_mod_txt = str(fecha_mod_raw)
+
+                    # Registro para historial (lo que usa el PDF/Excel)
                     historial_dicts.append({
-                        'fecha': fecha,
-                        'hora_entrada': hora_entrada,
-                        'hora_salida': hora_salida,
-                        'horas_presentes': horas_presentes
+                        "fecha": fecha,
+                        "hora_entrada": hora_entrada,
+                        "hora_salida": hora_salida,
+                        "horas_presentes": horas_presentes,
+                        "motivo_incidencia": motivo_txt,
+                        "fecha_modificacion": fecha_mod_txt,
                     })
 
                     # Acumular totales
@@ -621,26 +642,21 @@ class Modelo:
                     # Calcular semana y mes para promedios, usando la fecha real
                     if fecha_raw:
                         try:
-                            # fecha_raw suele venir como date/datetime
                             if isinstance(fecha_raw, str):
-                                # Por si acaso viene como cadena
                                 try:
                                     fecha_dt = datetime.strptime(fecha_raw, '%Y-%m-%d')
                                 except ValueError:
                                     fecha_dt = datetime.strptime(fecha_raw, '%Y-%m-%d %H:%M:%S')
                             else:
-                                # date/datetime
                                 if hasattr(fecha_raw, 'date'):
                                     fecha_dt = datetime.combine(fecha_raw, datetime.min.time()) \
                                         if not hasattr(fecha_raw, 'hour') else fecha_raw
                                 else:
-                                    # fallback
                                     fecha_dt = datetime.strptime(str(fecha_raw), '%Y-%m-%d')
 
                             semana = f"{fecha_dt.year}-W{fecha_dt.isocalendar()[1]}"
                             mes_clave = f"{fecha_dt.year}-{fecha_dt.month:02d}"
 
-                            # usar horas topadas
                             horas_semanales[semana] = horas_semanales.get(semana, 0.0) + horas_val
                             horas_mensuales[mes_clave] = horas_mensuales.get(mes_clave, 0.0) + horas_val
 
@@ -674,7 +690,7 @@ class Modelo:
                 'promedio_semanal': f"{promedio_semanal:.2f}",
                 'promedio_mensual': f"{promedio_mensual:.2f}",
                 'total_horas_periodo': f"{total_horas_periodo:.2f}",
-                'total_horas_mes': f"{total_horas_periodo:.2f}",  # por compatibilidad con tus PDFs
+                'total_horas_mes': f"{total_horas_periodo:.2f}",  # compatibilidad con PDFs
                 'hora_entrada_frecuente': hora_entrada_frec,
                 'hora_salida_frecuente': hora_salida_frec,
                 'historial': historial_dicts
@@ -693,7 +709,6 @@ class Modelo:
                 'hora_salida_frecuente': '--:--',
                 'historial': []
             }
-
 
 
     # ===== CATALOGO: GENERACIONES =====
