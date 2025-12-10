@@ -1,7 +1,9 @@
 from datetime import datetime
 from sqlite3 import IntegrityError
 from typing import List, Dict, Optional, Union
-from datetime import datetime, timedelta   # arriba del archivo, si aún no lo tienes
+from datetime import datetime, timedelta  
+
+
 class Modelo:
     def __init__(self, db):
         self.db = db
@@ -992,4 +994,90 @@ class Modelo:
             print(f"Error al obtener huella admin: {e}")
             return None
 
- 
+   # ===========================
+   # insidencias
+   # ===========================
+   
+    
+
+    def obtener_asistencias_sin_salida_por_alumno(self, alumno_id):
+        from datetime import date
+        """
+        Devuelve las asistencias de un alumno que tienen entrada pero NO salida
+        SOLO del mes actual.
+
+        Se considera "sin salida" cuando:
+        - hora_salida IS NULL
+        - o hora_salida = ''
+        - o hora_salida = '00:00:00'
+
+        El rango de fechas es:
+        [primer_dia_mes_actual, primer_dia_mes_siguiente)
+        Es decir, hasta el último día del mes actual inclusive.
+        """
+        try:
+            hoy = date.today()
+            # Primer día del mes actual
+            primer_dia = hoy.replace(day=1)
+
+            # Primer día del mes siguiente
+            if hoy.month == 12:
+                primer_dia_siguiente = date(hoy.year + 1, 1, 1)
+            else:
+                primer_dia_siguiente = date(hoy.year, hoy.month + 1, 1)
+
+            self.cursor.execute(
+                """
+                SELECT
+                    id,
+                    alumno_id,
+                    asistencia AS fecha,      -- 👈 AQUÍ usamos 'asistencia' y la alias 'fecha'
+                    hora_entrada,
+                    hora_salida,
+                    motivo_incidencia
+                FROM registro_asistencias
+                WHERE alumno_id = %s
+                AND asistencia >= %s
+                AND asistencia < %s
+                AND hora_entrada IS NOT NULL
+                AND (
+                        hora_salida IS NULL
+                    OR hora_salida = ''
+                    OR hora_salida = '00:00:00'
+                )
+                ORDER BY asistencia DESC, hora_entrada
+                """,
+                (alumno_id, primer_dia, primer_dia_siguiente)
+            )
+            cols = [c[0] for c in self.cursor.description]
+            return [dict(zip(cols, row)) for row in self.cursor.fetchall()]
+
+        except Exception as e:
+            print(f"Error al obtener asistencias sin salida: {e}")
+            return []
+
+    def registrar_salida_manual_con_incidencia(self, asistencia_id, hora_salida, motivo_incidencia) -> bool:
+        """
+        Actualiza un registro en registro_asistencias para:
+        - fijar hora_salida,
+        - guardar motivo_incidencia,
+        - y registrar fecha_modificacion.
+        """
+        try:
+            fecha_mod = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
+            self.cursor.execute(
+                """
+                UPDATE registro_asistencias
+                SET hora_salida = %s,
+                    motivo_incidencia = %s,
+                    fecha_modificacion = %s
+                WHERE id = %s
+                """,
+                (hora_salida, motivo_incidencia, fecha_mod, asistencia_id)
+            )
+            self.db.commit()
+            return True
+        except Exception as e:
+            print(f"Error al registrar salida manual con incidencia: {e}")
+            self.db.rollback()
+            return False
