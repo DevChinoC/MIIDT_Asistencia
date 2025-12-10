@@ -1803,7 +1803,7 @@ class VentanaPrincipal:
         main_frame.pack(fill="both", expand=True, padx=10, pady=0)
 
         # Panel izquierdo: Lector de Huella Digital
-        panel_lector = tk.Frame(main_frame, height=250, width=400, bg="white", bd=2, relief="groove")
+        panel_lector = tk.Frame(main_frame, height=350, width=400, bg="white", bd=2, relief="groove")
         panel_lector.grid(row=0, column=0, padx=10, pady=10, sticky="nw")
         panel_lector.pack_propagate(False)  # Esto evita que el frame se ajuste a su contenido
         tk.Label(panel_lector, text="🖐 Lector de Huella Digital", font=("Arial", 14, "bold"), bg="white", fg="#1565c0").pack(anchor="w", padx=10, pady=10)
@@ -1926,6 +1926,20 @@ class VentanaPrincipal:
                                 bg="#2563eb", fg="white", relief="flat", height=2, cursor="hand2",
                                 command=manejar_verificacion_huella)
         btn_escanear.pack(fill="x", padx=10, pady=10)
+        
+         # NUEVO: Botón Incidencias (debajo del lector)
+        btn_incidencias = tk.Button(
+            panel_lector,
+            text="Incidencias",
+            font=("Arial", 11, "bold"),
+            bg="#f97316",
+            fg="white",
+            relief="flat",
+            height=1,
+            cursor="hand2",
+            command=self._abrir_modal_incidencias   # función que abre el modal
+        )
+        btn_incidencias.pack(fill="x", padx=10, pady=(0, 10))
 
         # Panel derecho: Asistencias de Hoy
         self.panel_asistencias = tk.Frame(main_frame, bg="white", bd=2, relief="groove")
@@ -1998,7 +2012,214 @@ class VentanaPrincipal:
         main_frame.grid_columnconfigure(0, minsize=300)
         main_frame.grid_rowconfigure(0, weight=1)
 
-    
+    def _abrir_modal_incidencias(self):
+        """
+        1) Pide huella de la persona.
+        2) Muestra sus asistencias con entrada pero sin salida.
+        3) Permite registrar salida manual + motivo de incidencia.
+        """
+        from tkinter import ttk
+        import datetime
+
+        # 1. Verificar huella de la persona
+        try:
+            # Usa el mismo método que asistencia para obtener personas con huella
+            personas = self.controlador.obtener_estudiantes_para_asistencia()
+        except Exception as e:
+            messagebox.showerror("Error", f"No se pudieron obtener las huellas:\n{e}")
+            return
+
+        if not personas:
+            messagebox.showwarning("Sin datos", "No hay personas con huella registrada.")
+            return
+
+        try:
+            matching = self.interface_api.verify_fingerprint(personas)
+        except Exception as e:
+            messagebox.showerror("Error", f"Error al verificar la huella:\n{e}")
+            return
+
+        if not matching:
+            messagebox.showerror("Acceso denegado", "Huella no reconocida.")
+            return
+
+        # Ajusta la clave según tu dict (id, alumno_id, etc.)
+        alumno_id = matching.get("id") or matching.get("alumno_id")
+
+        if not alumno_id:
+            messagebox.showerror("Error", "No se pudo identificar al alumno asociado a la huella.")
+            return
+
+        # 2. Obtener asistencias sin salida
+        asistencias = self.controlador.obtener_asistencias_sin_salida_por_alumno(alumno_id)
+        if not asistencias:
+            messagebox.showinfo(
+                "Incidencias",
+                "Esta persona no tiene asistencias con entrada sin salida registrada."
+            )
+            return
+
+        # 3. Crear modal
+        modal = tk.Toplevel(self.ventana)
+        modal.title("Incidencias - Salida manual")
+        modal.geometry("650x400")
+        modal.transient(self.ventana)
+        modal.grab_set()
+
+        # Centrar
+        modal.update_idletasks()
+        ancho, alto = 650, 400
+        x = (modal.winfo_screenwidth() // 2) - (ancho // 2)
+        y = (modal.winfo_screenheight() // 2) - (alto // 2)
+        modal.geometry(f"{ancho}x{alto}+{x}+{y}")
+
+        frame = tk.Frame(modal, bg="#f3f4f6")
+        frame.pack(fill="both", expand=True, padx=10, pady=10)
+
+        tk.Label(
+            frame,
+            text="Asistencias con entrada sin salida",
+            bg="#f3f4f6",
+            font=("Arial", 12, "bold")
+        ).pack(anchor="w", pady=(0, 10))
+
+        # Treeview con asistencias
+        cols = ("id", "fecha", "hora_entrada", "hora_salida", "motivo_incidencia")
+        tv = ttk.Treeview(frame, columns=cols, show="headings", height=6)
+        tv.heading("id", text="ID")
+        tv.heading("fecha", text="Fecha")
+        tv.heading("hora_entrada", text="Hora entrada")
+        tv.heading("hora_salida", text="Hora salida")
+        tv.heading("motivo_incidencia", text="Motivo incidencia")
+
+        tv.column("id", width=50, anchor="center")
+        tv.column("fecha", width=90, anchor="center")
+        tv.column("hora_entrada", width=90, anchor="center")
+        tv.column("hora_salida", width=90, anchor="center")
+        tv.column("motivo_incidencia", width=200, anchor="w")
+
+        tv.pack(fill="x", padx=5)
+
+        # Cargar datos
+        def cargar_asistencias():
+            tv.delete(*tv.get_children())
+            for a in asistencias:
+                tv.insert(
+                    "",
+                    "end",
+                    values=(
+                        a["id"],
+                        a["fecha"],
+                        a.get("hora_entrada") or "",
+                        a.get("hora_salida") or "",
+                        a.get("motivo_incidencia") or "",
+                    )
+                )
+
+        cargar_asistencias()
+
+        # Área de edición salida + motivo
+        edit_frame = tk.Frame(frame, bg="#f3f4f6")
+        edit_frame.pack(fill="x", pady=(15, 0))
+
+        tk.Label(
+            edit_frame,
+            text="Hora de salida manual:",
+            bg="#f3f4f6",
+            font=("Arial", 10)
+        ).grid(row=0, column=0, sticky="w", padx=(0, 5), pady=2)
+
+        entry_hora_salida = tk.Entry(edit_frame, width=10, font=("Arial", 10))
+        entry_hora_salida.grid(row=0, column=1, sticky="w", pady=2)
+
+        # Por defecto, hora actual
+        ahora = datetime.datetime.now().strftime("%H:%M:%S")
+        entry_hora_salida.insert(0, ahora)
+
+        tk.Label(
+            edit_frame,
+            text="Motivo de incidencia:",
+            bg="#f3f4f6",
+            font=("Arial", 10)
+        ).grid(row=1, column=0, sticky="w", padx=(0, 5), pady=2)
+
+        motivos = [
+            "Vista de campo (obra)",
+            "Coordinación cerrada",
+            "Clases en línea",
+        ]
+        combo_motivo = ttk.Combobox(
+            edit_frame,
+            values=motivos,
+            state="readonly",
+            width=30
+        )
+        combo_motivo.grid(row=1, column=1, sticky="w", pady=2)
+
+        # Solo una opción seleccionable (readonly ya lo garantiza)
+
+        def guardar_salida_manual():
+            sel = tv.selection()
+            if not sel:
+                messagebox.showwarning(
+                    "Selecciona una asistencia",
+                    "Primero selecciona una asistencia de la lista."
+                )
+                return
+
+            item = tv.item(sel[0])
+            asistencia_id = item["values"][0]
+
+            hora_salida = entry_hora_salida.get().strip()
+            if not hora_salida:
+                messagebox.showwarning(
+                    "Hora de salida",
+                    "Debes ingresar la hora de salida."
+                )
+                return
+
+            motivo = combo_motivo.get().strip()
+            if not motivo:
+                messagebox.showwarning(
+                    "Motivo de incidencia",
+                    "Debes seleccionar un motivo de incidencia."
+                )
+                return
+
+            ok = self.controlador.registrar_salida_manual_con_incidencia(
+                asistencia_id,
+                hora_salida,
+                motivo
+            )
+            if ok:
+                messagebox.showinfo(
+                    "Salida registrada",
+                    "La salida manual y el motivo de incidencia se han guardado correctamente."
+                )
+                # actualizar lista local y volver a cargar
+                for a in asistencias:
+                    if a["id"] == asistencia_id:
+                        a["hora_salida"] = hora_salida
+                        a["motivo_incidencia"] = motivo
+                cargar_asistencias()
+            else:
+                messagebox.showerror(
+                    "Error",
+                    "No se pudo guardar la salida manual con incidencia."
+                )
+
+        btn_guardar = tk.Button(
+            frame,
+            text="Guardar salida manual",
+            bg="#16a34a",
+            fg="white",
+            font=("Arial", 11, "bold"),
+            relief="flat",
+            cursor="hand2",
+            command=guardar_salida_manual
+        )
+        btn_guardar.pack(pady=(15, 0))
+
     def _registrar_salida(self, registro_id, item_id):
         """
         Maneja el evento de clic en el botón de registrar salida.
@@ -3105,8 +3326,7 @@ class VentanaPrincipal:
                 # ------------------ EXPORTAR SEGÚN EXTENSIÓN ------------------
                 try:
                     if file_path.lower().endswith(".pdf"):
-                        # Si quieres, puedes enriquecer meta con estad/filtros, pero tu
-                        # _generar_pdf_alumno ya soporta el meta simple, así que lo usamos tal cual.
+                        # PDF individual
                         self._generar_pdf_alumno(meta, dest_path=file_path)
                         messagebox.showinfo("Exportación individual", f"PDF generado:\n{file_path}")
 
@@ -3199,20 +3419,21 @@ class VentanaPrincipal:
                             if isinstance(row_data[1], (int, float)):
                                 ws[f"B{row_idx}"].number_format = "0.00"
 
-                        # 4. Historial detallado
-                        ws.append([]) 
+                        # 4. Historial detallado (CON INCIDENCIAS)
+                        ws.append([])
                         titulo_historial_row = ws.max_row + 1
-                        ws.merge_cells(start_row=titulo_historial_row, start_column=1,end_row=titulo_historial_row, end_column=4)
+                        # ahora el historial usa 5 columnas (A..E)
+                        ws.merge_cells(start_row=titulo_historial_row, start_column=1,
+                                    end_row=titulo_historial_row, end_column=5)
                         cell_titulo = ws.cell(row=titulo_historial_row, column=1)
                         cell_titulo.value = "HISTORIAL DETALLADO DE ASISTENCIA"
                         cell_titulo.font = header_font
                         cell_titulo.fill = header_fill
                         cell_titulo.alignment = Alignment(horizontal="center")
-
-                        for col in range(1, 5):
+                        for col in range(1, 6):
                             ws.cell(row=titulo_historial_row, column=col).border = border
 
-                        encabezados = ["Fecha", "Hora de Entrada", "Hora de Salida", "Horas Presentes"]
+                        encabezados = ["Fecha", "Hora de Entrada", "Hora de Salida", "Horas Presentes", "Incidencia"]
                         header_row = ws.max_row + 1
                         ws.append(encabezados)
 
@@ -3223,25 +3444,50 @@ class VentanaPrincipal:
                             cell.border = border
                             cell.alignment = Alignment(horizontal="center")
 
-                        if historial and isinstance(historial, list) and (len(historial) == 0 or isinstance(historial[0], dict)):
+                        if historial and isinstance(historial, list) and (
+                            len(historial) == 0 or isinstance(historial[0], dict)
+                        ):
                             for reg in historial:
                                 row = [
                                     reg.get("fecha", "--/--/----"),
                                     reg.get("hora_entrada", "--:--"),
                                     reg.get("hora_salida", "--:--"),
-                                    float(reg.get("horas_presentes", 0))
+                                    float(reg.get("horas_presentes", 0)),
+                                    reg.get("motivo_incidencia", ""),  # NUEVO
                                 ]
                                 ws.append(row)
                         else:
-                            ws.append(["--/--/----", "--:--", "--:--", 0.0])
+                            ws.append(["--/--/----", "--:--", "--:--", 0.0, ""])
 
+                        # Bordes + formato + color en incidencias
                         for row_idx in range(header_row, ws.max_row + 1):
-                            for col_idx in range(1, 5):
+                            for col_idx in range(1, 6):
                                 cell = ws.cell(row=row_idx, column=col_idx)
                                 cell.border = border
                                 cell.alignment = alignment
                                 if col_idx == 4 and isinstance(cell.value, (int, float)):
                                     cell.number_format = "0.00"
+
+                            # Columna 5 = Incidencia → resaltar si no está vacía
+                            cell_inc = ws.cell(row=row_idx, column=5)
+                            if cell_inc.value not in (None, "", " "):
+                                cell_inc.fill = PatternFill(
+                                    start_color="FFF59D",
+                                    end_color="FFF59D",
+                                    fill_type="solid"
+                                )
+
+                        # 5. Leyenda de motivos de incidencias
+                        leyenda_row = ws.max_row + 2
+                        ws.merge_cells(start_row=leyenda_row, start_column=1,
+                                    end_row=leyenda_row, end_column=5)
+                        cell_leyenda = ws.cell(row=leyenda_row, column=1)
+                        cell_leyenda.value = (
+                            "Motivo de incidencias (solo cuando aplique): "
+                            "Vista de campo (obra), Coordinación cerrada, Clases en línea."
+                        )
+                        cell_leyenda.font = Font(italic=True, size=10)
+                        cell_leyenda.alignment = Alignment(horizontal="left")
 
                         # Ajustar anchos
                         for col in ws.columns:
@@ -3321,7 +3567,8 @@ class VentanaPrincipal:
             ws = wb.active; ws.title = f"Gen {gen}"
             header_font = Font(bold=True, color="FFFFFF", size=12)
             header_fill = PatternFill(start_color="4F81BD", end_color="4F81BD", fill_type="solid")
-            border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
+            border = Border(left=Side(style='thin'), right=Side(style='thin'),
+                            top=Side(style='thin'), bottom=Side(style='thin'))
 
             ws.merge_cells('A1:I1')
             ws["A1"] = f"REPORTE DE ASISTENCIAS — Generación {gen} — {mes_nombre} {anio}"
@@ -3369,10 +3616,11 @@ class VentanaPrincipal:
 
 
 
-    
+
     def _generar_pdf_alumno(self, meta: dict, carpeta_salida: str = None, dest_path: str = None) -> str:
         """
         Genera un PDF individual para el alumno usando el diseño de fondo.
+        Incluye columna de Incidencias y leyenda de motivos.
         """
 
         def slugify(s):
@@ -3448,6 +3696,7 @@ class VentanaPrincipal:
         except Exception as e:
             print(f"Error al cargar membrete PDF: {e}")
             pass
+
         # Título
         pdf.set_font("Arial", "B", 20)
         pdf.set_xy(0, 40)
@@ -3466,7 +3715,7 @@ class VentanaPrincipal:
         line_h = 7
 
         left_x = 15
-        right_x = 120      # más a la izquierda para mayor espacio
+        right_x = 120
         margin_r = 15
 
         left_w = right_x - left_x - 5
@@ -3490,7 +3739,7 @@ class VentanaPrincipal:
         pdf.multi_cell(right_w, line_h, f"Asesor: {asesor}")
         y = max(y + line_h, pdf.get_y())
 
-        # 3️⃣ Área / Carrera (carrera con salto automático)
+        # 3️⃣ Área / Carrera
         pdf.set_xy(left_x, y)
         pdf.cell(left_w, line_h, f"Área: {area}", ln=0)
 
@@ -3518,10 +3767,12 @@ class VentanaPrincipal:
         pdf.cell(0, line_h, "Historial de Asistencias", ln=True)
         pdf.ln(2)
 
-        # Tabla
+        # ------------------------------------------------------------
+        # Tabla con columna extra "Incidencia"
+        # ------------------------------------------------------------
         pdf.set_font("Arial", "B", 10)
-        col_w = [40, 40, 40, 40]
-        headers = ["Fecha", "Hora Entrada", "Hora Salida", "Horas Presentes"]
+        col_w = [35, 35, 35, 35, 50]
+        headers = ["Fecha", "Hora Entrada", "Hora Salida", "Horas Presentes", "Incidencia"]
         ALTURA_FILA = 7
 
         for w, h in zip(col_w, headers):
@@ -3529,8 +3780,10 @@ class VentanaPrincipal:
         pdf.ln(8)
 
         pdf.set_font("Arial", "", 9)
+
         for reg in historial:
             if pdf.get_y() + ALTURA_FILA > Y_MAX_TABLA:
+                # Nueva página si no cabe la fila
                 pdf.add_page()
                 page_w = pdf.w
                 page_h = pdf.h
@@ -3547,17 +3800,44 @@ class VentanaPrincipal:
 
                 pdf.set_y(50)
 
+                # Reimprimir encabezados de tabla
                 pdf.set_font("Arial", "B", 10)
                 for w, h in zip(col_w, headers):
                     pdf.cell(w, 8, h, border=1, align="C")
                 pdf.ln(8)
                 pdf.set_font("Arial", "", 9)
 
+            motivo = str(reg.get("motivo_incidencia", "") or "")
+            hay_incidencia = bool(motivo)
+
+            # columnas normales
             pdf.cell(col_w[0], ALTURA_FILA, str(reg.get("fecha", "")), border=1, align="C")
             pdf.cell(col_w[1], ALTURA_FILA, str(reg.get("hora_entrada", "")), border=1, align="C")
             pdf.cell(col_w[2], ALTURA_FILA, str(reg.get("hora_salida", "")), border=1, align="C")
             pdf.cell(col_w[3], ALTURA_FILA, str(reg.get("horas_presentes", "")), border=1, align="C")
+
+            # columna de incidencia: si hay motivo, se rellena con color suave
+            if hay_incidencia:
+                pdf.set_fill_color(255, 230, 153)  # amarillo claro
+                pdf.cell(col_w[4], ALTURA_FILA, motivo, border=1, align="C", fill=True)
+                # resetear color de relleno a blanco para futuras filas
+                pdf.set_fill_color(255, 255, 255)
+            else:
+                pdf.cell(col_w[4], ALTURA_FILA, "", border=1, align="C")
+
             pdf.ln(ALTURA_FILA)
+
+        # ------------------------------------------------------------
+        # Leyenda de motivos de incidencias
+        # ------------------------------------------------------------
+        pdf.ln(5)
+        pdf.set_font("Arial", "I", 9)
+        pdf.multi_cell(
+            0,
+            5,
+            "Motivo de incidencias (solo cuando aplique): "
+            "Vista de campo (obra), Coordinación cerrada, Clases en línea."
+        )
 
         # Firma
         FIRMA_ALTURA = 22
@@ -3605,6 +3885,7 @@ class VentanaPrincipal:
         pdf.output(dest_path)
         return dest_path
 
+        
 
     def _enviar_reporte_generacion_por_correo(self, top):
         """
