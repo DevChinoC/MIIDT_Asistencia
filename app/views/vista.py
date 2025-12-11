@@ -2359,7 +2359,7 @@ class VentanaPrincipal:
             cursor="hand2",
             command=modal.destroy
         )
-        btn_cerrar.pack(side="right", padx=(10, 10), pady=5)
+        btn_cerrar.pack(side="right", padx=(9, 10), pady=5)
 
 
     def _registrar_salida(self, registro_id, item_id):
