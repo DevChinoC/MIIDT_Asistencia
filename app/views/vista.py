@@ -1277,15 +1277,16 @@ class VentanaPrincipal:
         # Crear ventana modal
         modal = tk.Toplevel(self.ventana)
         modal.title("Editar Estudiante")
-        modal.geometry("650x500")
+        # ⬇⬇ ventana más cómoda ⬇⬇
+        window_width = 900
+        window_height = 520
+        modal.geometry(f"{window_width}x{window_height}")
         modal.resizable(False, False)
         modal.grab_set()
         modal.configure(bg='#f3f4f6')
 
         # Centrar
         modal.update_idletasks()
-        window_width = 650
-        window_height = 500
         x = (modal.winfo_screenwidth() // 2) - (window_width // 2)
         y = (modal.winfo_screenheight() // 2) - (window_height // 2)
         modal.geometry(f'{window_width}x{window_height}+{x}+{y}')
@@ -1396,11 +1397,57 @@ class VentanaPrincipal:
         )
         combo_area.grid(row=2, column=3, padx=5, pady=5, sticky="w")
 
+        # ---------- CARRERA: COMBO + OTROS ----------
         tk.Label(form_frame, text="Carrera:", bg='#f3f4f6',
                 font=('Arial', 10, 'bold')).grid(row=3, column=2, sticky="e", padx=5, pady=5)
-        entry_carrera = tk.Entry(form_frame, textvariable=vars_data['carrera'],
-                                font=('Arial', 10), relief='solid', bd=1, bg='white', width=28)
-        entry_carrera.grid(row=3, column=3, padx=5, pady=5, sticky="w")
+
+        opciones_carrera = [
+            "Maestría en Ingeniería para la Innovación y Desarrollo Tecnológico",
+            "Doctorado en Ingeniería para la Innovación y Desarrollo Tecnológico",
+            "Otros",
+        ]
+
+        combo_carrera = ttk.Combobox(
+            form_frame,
+            font=('Arial', 10),
+            values=opciones_carrera,
+            width=26,
+            state="readonly"
+        )
+        combo_carrera.grid(row=3, column=3, padx=5, pady=5, sticky="w")
+
+        tk.Label(form_frame, text="Especifique carrera (si eligió 'Otros'):", bg='#f3f4f6',
+                font=('Arial', 10, 'bold')).grid(row=4, column=2, sticky="e", padx=5, pady=5)
+        entry_carrera_otro = tk.Entry(
+            form_frame,
+            font=('Arial', 10),
+            relief='solid', bd=1, bg='white', width=28
+        )
+        entry_carrera_otro.grid(row=4, column=3, padx=5, pady=5, sticky="w")
+        # ⬇⬇ Igual que en "nuevo estudiante": deshabilitado y vacío al inicio ⬇⬇
+        entry_carrera_otro.config(state="disabled")
+
+        def _on_carrera_change(event=None):
+            opcion = combo_carrera.get().strip()
+            if opcion == "Otros":
+                entry_carrera_otro.config(state="normal")
+                entry_carrera_otro.focus_set()
+            else:
+                entry_carrera_otro.delete(0, tk.END)
+                entry_carrera_otro.config(state="disabled")
+
+        combo_carrera.bind("<<ComboboxSelected>>", _on_carrera_change)
+
+        # Pre-seleccionar solo en el COMBO (sin tocar el entry)
+        carrera_actual = vars_data['carrera'].get().strip()
+        if carrera_actual in opciones_carrera[:2]:
+            combo_carrera.set(carrera_actual)
+        elif carrera_actual:
+            # Carrera distinta → dejamos "Otros" seleccionado,
+            # pero el campo de texto sigue vacío y deshabilitado
+            combo_carrera.set("Otros")
+        else:
+            combo_carrera.set(opciones_carrera[0])
 
         # Opcional: que las columnas se vean bien distribuidas
         for col in range(4):
@@ -1454,6 +1501,15 @@ class VentanaPrincipal:
 
         # ======================= GUARDAR / CANCELAR =======================
         def guardar_cambios():
+            from tkinter import messagebox
+
+            # Carrera según selección
+            opcion = combo_carrera.get().strip()
+            if opcion == "Otros":
+                carrera = entry_carrera_otro.get().strip()
+            else:
+                carrera = opcion
+
             try:
                 ok = self.controlador.editar_estudiante(
                     estudiante_id=estudiante.get('id'),
@@ -1465,7 +1521,7 @@ class VentanaPrincipal:
                     huella_digital=huella_digital,
                     generacion=vars_data['generacion'].get(),
                     area_conocimiento=vars_data['area_conocimiento'].get(),
-                    carrera=vars_data['carrera'].get(),
+                    carrera=carrera,
                     asesor_nombre=vars_data['asesor'].get(),
                     id_asesor=self.asesores_data.get(vars_data['asesor'].get()),
                 )
@@ -1482,16 +1538,16 @@ class VentanaPrincipal:
         btn_frame.grid(row=2, column=0, columnspan=2, sticky="ew")
 
         tk.Button(
-            btn_frame, text="Guardar", bg="#4CAF50", fg="white",
-            font=('Arial', 10), relief="flat", cursor="hand2",
-            command=guardar_cambios
-        ).pack(side="right", padx=(5, 25), pady=5)
-
-        tk.Button(
             btn_frame, text="Cancelar", bg="#f44336", fg="white",
             font=('Arial', 10), relief="flat", cursor="hand2",
             command=modal.destroy
         ).pack(side="right", padx=5, pady=5)
+
+        tk.Button(
+            btn_frame, text="Guardar", bg="#4CAF50", fg="white",
+            font=('Arial', 10), relief="flat", cursor="hand2",
+            command=guardar_cambios
+        ).pack(side="right", padx=(5, 25), pady=5)
 
         def _on_canvas_configure(event):
             canvas.itemconfig("all", width=event.width)
@@ -1529,14 +1585,16 @@ class VentanaPrincipal:
     def _abrir_modal_estudiante(self):
         modal = tk.Toplevel(self.ventana)
         modal.title("Registrar Nuevo Estudiante")
-        modal.geometry("800x450")
+
+        # ⬇⬇ NUEVO TAMAÑO ⬇⬇
+        ancho = 900
+        alto = 520
+        modal.geometry(f"{ancho}x{alto}")
         modal.transient(self.ventana)
         modal.grab_set()
 
         # Centrar el modal en la pantalla
         modal.update_idletasks()
-        ancho = 800
-        alto = 450
         x = (modal.winfo_screenwidth() // 2) - (ancho // 2)
         y = (modal.winfo_screenheight() // 2) - (alto // 2)
         modal.geometry(f"{ancho}x{alto}+{x}+{y}")
@@ -1544,15 +1602,22 @@ class VentanaPrincipal:
         # Configurar el grid principal
         modal.grid_columnconfigure(0, weight=1)
         modal.grid_columnconfigure(1, weight=1)
+        modal.grid_rowconfigure(0, weight=0)  # formulario
+        modal.grid_rowconfigure(1, weight=0)  # huella
+        modal.grid_rowconfigure(2, weight=0)  # botón
 
         # Estilos
         estilo_label = {'font': ('Arial', 11), 'anchor': 'w', 'padx': 5, 'pady': 2}
         estilo_entry = {'font': ('Arial', 11), 'width': 25}
         estilo_combobox = {'font': ('Arial', 11), 'width': 27}
 
-        # Frame principal
+        # Frame principal del formulario
         form_frame = tk.Frame(modal, padx=20, pady=10)
         form_frame.grid(row=0, column=0, columnspan=2, sticky="nsew")
+
+        # Que las 4 columnas internas se repartan bien
+        for c in range(4):
+            form_frame.grid_columnconfigure(c, weight=1)
 
         # Título
         tk.Label(
@@ -1560,7 +1625,7 @@ class VentanaPrincipal:
             text="Registrar Nuevo Estudiante",
             font=('Arial', 16, 'bold'),
             pady=10
-        ).grid(row=0, column=0, columnspan=2)
+        ).grid(row=0, column=0, columnspan=4)
 
         # Helper para crear campos
         def crear_campo(frame, label_text, row, column, widget_type='entry', options=None):
@@ -1601,7 +1666,6 @@ class VentanaPrincipal:
             [asesor['name'] for asesor in asesores]
         )
 
-        # Guardar los datos de los asesores (nombre -> id)
         self.asesores_data = {asesor['name']: asesor['id'] for asesor in asesores}
 
         areas = self.controlador.obtener_areas_conocimiento()
@@ -1610,10 +1674,36 @@ class VentanaPrincipal:
             [area['nombre'] for area in areas]
         )
 
-        entry_carrera = crear_campo(form_frame, "Carrera:", 5, 1)
+        # --------- CARRERA: COMBO + "OTROS" ---------
+        opciones_carrera = [
+            "Maestría en Ingeniería para la Innovación y Desarrollo Tecnológico",
+            "Doctorado en Ingeniería para la Innovación y Desarrollo Tecnológico",
+            "Otros",
+        ]
 
-        # Padding entre columnas
-        form_frame.grid_columnconfigure(1, pad=20)
+        combo_carrera = crear_campo(
+            form_frame, "Carrera:", 5, 1, 'combobox', opciones_carrera
+        )
+        combo_carrera.state(["readonly"])
+
+        entry_carrera_otro = crear_campo(
+            form_frame,
+            "Especifique carrera (si eligió 'Otros'):",
+            6, 1,
+            'entry'
+        )
+        entry_carrera_otro.config(state="disabled")
+
+        def _on_carrera_change(event=None):
+            opcion = combo_carrera.get().strip()
+            if opcion == "Otros":
+                entry_carrera_otro.config(state="normal")
+                entry_carrera_otro.focus_set()
+            else:
+                entry_carrera_otro.delete(0, "end")
+                entry_carrera_otro.config(state="disabled")
+
+        combo_carrera.bind("<<ComboboxSelected>>", _on_carrera_change)
 
         # --------------------------
         # Sección de huella digital
@@ -1670,16 +1760,16 @@ class VentanaPrincipal:
             nombre = entry_nombre.get().strip()
             apellido_p = entry_apellido_p.get().strip()
             apellido_m = entry_apellido_m.get().strip()
-            matricula = entry_matricula.get().strip()          # <-- TEXTO (conserva ceros)
+            matricula = entry_matricula.get().strip()
             generacion = self.combo_generacion.get().strip()
             nombre_asesor = combo_asesor.get().strip()
             id_asesor = self.asesores_data.get(nombre_asesor)
             area_conocimiento = combo_area.get().strip()
-            carrera = entry_carrera.get().strip()
-            
-            
 
-            # Validación básica
+            opcion_carrera = combo_carrera.get().strip()
+            carrera_otro = entry_carrera_otro.get().strip()
+            carrera = carrera_otro if opcion_carrera == "Otros" else opcion_carrera
+
             if not all([
                 email, matricula, nombre, apellido_p, apellido_m,
                 generacion, nombre_asesor, id_asesor, area_conocimiento, carrera
@@ -1687,12 +1777,10 @@ class VentanaPrincipal:
                 messagebox.showwarning("Campos vacíos", "Por favor, completa todos los campos.")
                 return
 
-            # Matrícula numérica, pero en TEXTO (permite '0' y ceros a la izquierda)
             if not matricula.isdigit():
                 messagebox.showerror("Error", "La matrícula debe contener solo números.")
                 return
-            
-            # ------------------ VALIDAR FORMATO DE CORREO ------------------  # 
+
             patron_correo = r'^[\w\.-]+@[\w\.-]+\.\w+$'
             if not re.match(patron_correo, email):
                 messagebox.showerror(
@@ -1702,8 +1790,6 @@ class VentanaPrincipal:
                 entry_email.focus_set()
                 return
 
-
-            # Registrar y manejar duplicado
             res = self.controlador.registrar_estudiante(
                 email, matricula, nombre, apellido_p, apellido_m,
                 huella_digital, generacion, area_conocimiento,
@@ -1717,7 +1803,6 @@ class VentanaPrincipal:
                 )
                 entry_matricula.focus_set()
                 return
-
             elif res == "duplicado_email":
                 messagebox.showwarning(
                     "Correo ya registrado",
@@ -1725,14 +1810,12 @@ class VentanaPrincipal:
                 )
                 entry_email.focus_set()
                 return
-
             elif res == "duplicado_huella":
                 messagebox.showwarning(
                     "Huella ya registrada",
                     "La huella capturada ya está asociada a otro estudiante."
                 )
                 return
-
             elif res is True:
                 messagebox.showinfo(
                     "Estudiante registrado",
@@ -1745,15 +1828,12 @@ class VentanaPrincipal:
                     f"Carrera: {carrera}"
                 )
                 self._cargar_estudiantes_en_vista()
-                # self.cargar_estudiantes_reportes()  ← la vemos en el siguiente punto
                 modal.destroy()
-
             else:
                 messagebox.showerror(
                     "Error",
                     "Ocurrió un error al registrar al estudiante."
                 )
-
 
         # --------------------------
         # Botón registrar
@@ -1937,7 +2017,7 @@ class VentanaPrincipal:
             bg="#f97316",
             fg="white",
             relief="flat",
-            height=1,
+            height=2,
             cursor="hand2",
             command=self._abrir_modal_incidencias   # función que abre el modal
         )
@@ -2025,7 +2105,6 @@ class VentanaPrincipal:
 
         # 1. Verificar huella de la persona
         try:
-            # Usa el mismo método que asistencia para obtener personas con huella
             personas = self.controlador.obtener_estudiantes_para_asistencia()
         except Exception as e:
             messagebox.showerror("Error", f"No se pudieron obtener las huellas:\n{e}")
@@ -2045,9 +2124,7 @@ class VentanaPrincipal:
             messagebox.showerror("Acceso denegado", "Huella no reconocida.")
             return
 
-        # Ajusta la clave según tu dict (id, alumno_id, etc.)
         alumno_id = matching.get("id") or matching.get("alumno_id")
-
         if not alumno_id:
             messagebox.showerror("Error", "No se pudo identificar al alumno asociado a la huella.")
             return
@@ -2086,6 +2163,7 @@ class VentanaPrincipal:
         ).pack(anchor="w", pady=(0, 10))
 
         # Treeview con asistencias
+        from tkinter import ttk
         cols = ("id", "fecha", "hora_entrada", "hora_salida", "motivo_incidencia")
         tv = ttk.Treeview(frame, columns=cols, show="headings", height=6)
         tv.heading("id", text="ID")
@@ -2126,17 +2204,14 @@ class VentanaPrincipal:
 
         tk.Label(
             edit_frame,
-            text="Hora de salida manual:",
+            text="Hora de salida (automática):",
             bg="#f3f4f6",
             font=("Arial", 10)
         ).grid(row=0, column=0, sticky="w", padx=(0, 5), pady=2)
 
-        entry_hora_salida = tk.Entry(edit_frame, width=10, font=("Arial", 10))
+        # Entrada SOLO lectura (se llena automática)
+        entry_hora_salida = tk.Entry(edit_frame, width=10, font=("Arial", 10), state="readonly")
         entry_hora_salida.grid(row=0, column=1, sticky="w", pady=2)
-
-        # Por defecto, hora actual
-        ahora = datetime.datetime.now().strftime("%H:%M:%S")
-        entry_hora_salida.insert(0, ahora)
 
         tk.Label(
             edit_frame,
@@ -2158,7 +2233,48 @@ class VentanaPrincipal:
         )
         combo_motivo.grid(row=1, column=1, sticky="w", pady=2)
 
-        # Solo una opción seleccionable (readonly ya lo garantiza)
+        # --- Autocompletar hora de salida al seleccionar un motivo ---
+        def autocompletar_hora_salida(event=None):
+            sel = tv.selection()
+            if not sel:
+                return
+
+            item = tv.item(sel[0])
+            values = item.get("values", [])
+            if len(values) < 3:
+                return
+
+            hora_ent_str = str(values[2]).strip()  # columna "hora_entrada"
+            if not hora_ent_str:
+                return
+
+            try:
+                # Soportar HH:MM o HH:MM:SS
+                if len(hora_ent_str) == 5:
+                    dt_ent = datetime.datetime.strptime(hora_ent_str, "%H:%M")
+                else:
+                    dt_ent = datetime.datetime.strptime(hora_ent_str, "%H:%M:%S")
+
+                # Sumar 8 horas
+                dt_sal = dt_ent + datetime.timedelta(hours=8)
+
+                # Límite máximo: 19:00 (7 PM)
+                limite = dt_ent.replace(hour=19, minute=0, second=0)
+                if dt_sal > limite:
+                    dt_sal = limite
+
+                hora_auto = dt_sal.strftime("%H:%M:%S")
+
+                # Escribir en entry readonly
+                entry_hora_salida.config(state="normal")
+                entry_hora_salida.delete(0, tk.END)
+                entry_hora_salida.insert(0, hora_auto)
+                entry_hora_salida.config(state="readonly")
+
+            except Exception:
+                pass
+
+        combo_motivo.bind("<<ComboboxSelected>>", autocompletar_hora_salida)
 
         def guardar_salida_manual():
             sel = tv.selection()
@@ -2170,21 +2286,29 @@ class VentanaPrincipal:
                 return
 
             item = tv.item(sel[0])
-            asistencia_id = item["values"][0]
-
-            hora_salida = entry_hora_salida.get().strip()
-            if not hora_salida:
-                messagebox.showwarning(
-                    "Hora de salida",
-                    "Debes ingresar la hora de salida."
+            values = item.get("values", [])
+            if not values:
+                messagebox.showerror(
+                    "Error",
+                    "No se pudo obtener la información de la asistencia seleccionada."
                 )
                 return
+
+            asistencia_id = values[0]
 
             motivo = combo_motivo.get().strip()
             if not motivo:
                 messagebox.showwarning(
                     "Motivo de incidencia",
                     "Debes seleccionar un motivo de incidencia."
+                )
+                return
+
+            hora_salida = entry_hora_salida.get().strip()
+            if not hora_salida:
+                messagebox.showwarning(
+                    "Hora de salida",
+                    "Selecciona un motivo para que se calcule la hora de salida automática."
                 )
                 return
 
@@ -2198,7 +2322,6 @@ class VentanaPrincipal:
                     "Salida registrada",
                     "La salida manual y el motivo de incidencia se han guardado correctamente."
                 )
-                # actualizar lista local y volver a cargar
                 for a in asistencias:
                     if a["id"] == asistencia_id:
                         a["hora_salida"] = hora_salida
@@ -2210,9 +2333,13 @@ class VentanaPrincipal:
                     "No se pudo guardar la salida manual con incidencia."
                 )
 
+        # ====== BOTONES INFERIORES (GUARDAR / SALIR) ======
+        btn_frame = tk.Frame(frame, bg="#f3f4f6")
+        btn_frame.pack(fill="x", pady=(25, 5), anchor="s")
+
         btn_guardar = tk.Button(
-            frame,
-            text="Guardar salida manual",
+            btn_frame,
+            text="Guardar",
             bg="#16a34a",
             fg="white",
             font=("Arial", 11, "bold"),
@@ -2220,7 +2347,20 @@ class VentanaPrincipal:
             cursor="hand2",
             command=guardar_salida_manual
         )
-        btn_guardar.pack(pady=(15, 0))
+        btn_guardar.pack(side="left", padx=(10, 40), pady=5)
+
+        btn_cerrar = tk.Button(
+            btn_frame,
+            text="Salir",
+            bg="#e11d48",
+            fg="white",
+            font=("Arial", 11, "bold"),
+            relief="flat",
+            cursor="hand2",
+            command=modal.destroy
+        )
+        btn_cerrar.pack(side="right", padx=(9, 10), pady=5)
+
 
     def _registrar_salida(self, registro_id, item_id):
         """
