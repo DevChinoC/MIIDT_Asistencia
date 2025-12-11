@@ -2017,7 +2017,7 @@ class VentanaPrincipal:
             bg="#f97316",
             fg="white",
             relief="flat",
-            height=1,
+            height=2,
             cursor="hand2",
             command=self._abrir_modal_incidencias   # función que abre el modal
         )
@@ -2105,7 +2105,6 @@ class VentanaPrincipal:
 
         # 1. Verificar huella de la persona
         try:
-            # Usa el mismo método que asistencia para obtener personas con huella
             personas = self.controlador.obtener_estudiantes_para_asistencia()
         except Exception as e:
             messagebox.showerror("Error", f"No se pudieron obtener las huellas:\n{e}")
@@ -2125,9 +2124,7 @@ class VentanaPrincipal:
             messagebox.showerror("Acceso denegado", "Huella no reconocida.")
             return
 
-        # Ajusta la clave según tu dict (id, alumno_id, etc.)
         alumno_id = matching.get("id") or matching.get("alumno_id")
-
         if not alumno_id:
             messagebox.showerror("Error", "No se pudo identificar al alumno asociado a la huella.")
             return
@@ -2166,6 +2163,7 @@ class VentanaPrincipal:
         ).pack(anchor="w", pady=(0, 10))
 
         # Treeview con asistencias
+        from tkinter import ttk
         cols = ("id", "fecha", "hora_entrada", "hora_salida", "motivo_incidencia")
         tv = ttk.Treeview(frame, columns=cols, show="headings", height=6)
         tv.heading("id", text="ID")
@@ -2206,17 +2204,14 @@ class VentanaPrincipal:
 
         tk.Label(
             edit_frame,
-            text="Hora de salida manual:",
+            text="Hora de salida (automática):",
             bg="#f3f4f6",
             font=("Arial", 10)
         ).grid(row=0, column=0, sticky="w", padx=(0, 5), pady=2)
 
-        entry_hora_salida = tk.Entry(edit_frame, width=10, font=("Arial", 10))
+        # Entrada SOLO lectura (se llena automática)
+        entry_hora_salida = tk.Entry(edit_frame, width=10, font=("Arial", 10), state="readonly")
         entry_hora_salida.grid(row=0, column=1, sticky="w", pady=2)
-
-        # Por defecto, hora actual
-        ahora = datetime.datetime.now().strftime("%H:%M:%S")
-        entry_hora_salida.insert(0, ahora)
 
         tk.Label(
             edit_frame,
@@ -2238,7 +2233,48 @@ class VentanaPrincipal:
         )
         combo_motivo.grid(row=1, column=1, sticky="w", pady=2)
 
-        # Solo una opción seleccionable (readonly ya lo garantiza)
+        # --- Autocompletar hora de salida al seleccionar un motivo ---
+        def autocompletar_hora_salida(event=None):
+            sel = tv.selection()
+            if not sel:
+                return
+
+            item = tv.item(sel[0])
+            values = item.get("values", [])
+            if len(values) < 3:
+                return
+
+            hora_ent_str = str(values[2]).strip()  # columna "hora_entrada"
+            if not hora_ent_str:
+                return
+
+            try:
+                # Soportar HH:MM o HH:MM:SS
+                if len(hora_ent_str) == 5:
+                    dt_ent = datetime.datetime.strptime(hora_ent_str, "%H:%M")
+                else:
+                    dt_ent = datetime.datetime.strptime(hora_ent_str, "%H:%M:%S")
+
+                # Sumar 8 horas
+                dt_sal = dt_ent + datetime.timedelta(hours=8)
+
+                # Límite máximo: 19:00 (7 PM)
+                limite = dt_ent.replace(hour=19, minute=0, second=0)
+                if dt_sal > limite:
+                    dt_sal = limite
+
+                hora_auto = dt_sal.strftime("%H:%M:%S")
+
+                # Escribir en entry readonly
+                entry_hora_salida.config(state="normal")
+                entry_hora_salida.delete(0, tk.END)
+                entry_hora_salida.insert(0, hora_auto)
+                entry_hora_salida.config(state="readonly")
+
+            except Exception:
+                pass
+
+        combo_motivo.bind("<<ComboboxSelected>>", autocompletar_hora_salida)
 
         def guardar_salida_manual():
             sel = tv.selection()
@@ -2250,21 +2286,29 @@ class VentanaPrincipal:
                 return
 
             item = tv.item(sel[0])
-            asistencia_id = item["values"][0]
-
-            hora_salida = entry_hora_salida.get().strip()
-            if not hora_salida:
-                messagebox.showwarning(
-                    "Hora de salida",
-                    "Debes ingresar la hora de salida."
+            values = item.get("values", [])
+            if not values:
+                messagebox.showerror(
+                    "Error",
+                    "No se pudo obtener la información de la asistencia seleccionada."
                 )
                 return
+
+            asistencia_id = values[0]
 
             motivo = combo_motivo.get().strip()
             if not motivo:
                 messagebox.showwarning(
                     "Motivo de incidencia",
                     "Debes seleccionar un motivo de incidencia."
+                )
+                return
+
+            hora_salida = entry_hora_salida.get().strip()
+            if not hora_salida:
+                messagebox.showwarning(
+                    "Hora de salida",
+                    "Selecciona un motivo para que se calcule la hora de salida automática."
                 )
                 return
 
@@ -2278,7 +2322,6 @@ class VentanaPrincipal:
                     "Salida registrada",
                     "La salida manual y el motivo de incidencia se han guardado correctamente."
                 )
-                # actualizar lista local y volver a cargar
                 for a in asistencias:
                     if a["id"] == asistencia_id:
                         a["hora_salida"] = hora_salida
@@ -2290,9 +2333,13 @@ class VentanaPrincipal:
                     "No se pudo guardar la salida manual con incidencia."
                 )
 
+        # ====== BOTONES INFERIORES (GUARDAR / SALIR) ======
+        btn_frame = tk.Frame(frame, bg="#f3f4f6")
+        btn_frame.pack(fill="x", pady=(25, 5), anchor="s")
+
         btn_guardar = tk.Button(
-            frame,
-            text="Guardar salida manual",
+            btn_frame,
+            text="Guardar",
             bg="#16a34a",
             fg="white",
             font=("Arial", 11, "bold"),
@@ -2300,7 +2347,20 @@ class VentanaPrincipal:
             cursor="hand2",
             command=guardar_salida_manual
         )
-        btn_guardar.pack(pady=(15, 0))
+        btn_guardar.pack(side="left", padx=(10, 40), pady=5)
+
+        btn_cerrar = tk.Button(
+            btn_frame,
+            text="Salir",
+            bg="#e11d48",
+            fg="white",
+            font=("Arial", 11, "bold"),
+            relief="flat",
+            cursor="hand2",
+            command=modal.destroy
+        )
+        btn_cerrar.pack(side="right", padx=(10, 10), pady=5)
+
 
     def _registrar_salida(self, registro_id, item_id):
         """
