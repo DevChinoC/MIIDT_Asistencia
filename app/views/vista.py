@@ -1,4 +1,4 @@
-import os
+import os,sys
 import re
 import unicodedata
 from tkinter import simpledialog
@@ -13,18 +13,47 @@ from pdf2image import convert_from_path
 from PIL import Image
 from fpdf.enums import AccessPermission  
 import traceback, openpyxl, threading, locale
-from openpyxl.utils import get_column_letter
 from collections import defaultdict
 from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
 from datetime import datetime
 from openpyxl import Workbook
 from openpyxl.utils.dataframe import dataframe_to_rows
-import tempfile, os, shutil
+import tempfile, os, shutil,time
+import socket
 import os, unicodedata, re
 from datetime import datetime
 import locale
 import traceback
+from openpyxl.styles import Font, PatternFill, Border, Side, Alignment, Protection
+from openpyxl.utils import get_column_letter
+from openpyxl.workbook.protection import WorkbookProtection
 
+# ===========================================================
+# Carga de .env y rutas de recursos (normal + PyInstaller)
+# ===========================================================
+if getattr(sys, 'frozen', False):
+    BASE_DIR = sys._MEIPASS
+else:
+    # __file__ = app/views/vista.py  -> subimos a la raíz del proyecto
+    BASE_DIR = os.path.dirname(
+                    os.path.dirname(
+                        os.path.dirname(
+                            os.path.abspath(__file__)
+                        )
+                    )
+                )
+
+def resource_path(relative_path: str) -> str:
+    """
+    Devuelve la ruta absoluta a un recurso (iconos, imágenes, etc.),
+    funcionando tanto en modo script como en .exe (PyInstaller).
+    """
+    relative_path = relative_path.replace("/", os.sep)
+    return os.path.join(BASE_DIR, relative_path)
+
+ENV_PATH = os.path.join(BASE_DIR, "config", ".env")
+load_dotenv(ENV_PATH)
+# ===========================================================
 
 try:
     from config.email import send_mail   # util para enviar email
@@ -268,8 +297,12 @@ class VentanaPrincipal:
         return _on_mousewheel
 
     def _cargar_icono(self, icon_path, size=(16, 16)):
-        """Carga y redimensiona un ícono desde un archivo"""
+        """Carga y redimensiona un ícono desde un archivo (soporta .exe y modo normal)"""
         try:
+            # Si la ruta es relativa, pásala por resource_path
+            if not os.path.isabs(icon_path):
+                icon_path = resource_path(icon_path)
+
             img = Image.open(icon_path)
             img = img.resize(size, Image.Resampling.LANCZOS)
             return ImageTk.PhotoImage(img)
@@ -335,15 +368,31 @@ class VentanaPrincipal:
             self._abrir_panel_administracion()
 
 
-
+   #---------Apartado de login----------#
+   
     def _abrir_panel_admin_guardado(self):
         """Si no hay sesión admin, pide login. Si la hay, abre panel."""
         if not self._admin_logged:
             if not self._login_admin():
                 return
         self._abrir_panel_administracion()
-
     def _login_admin(self) -> bool:
+        """
+        Pregunta si quieres iniciar sesión de administrador con HUELLADIGITAL
+        o con USUARIO/CONTRASEÑA y llama al método correspondiente.
+        """
+        usar_huella = messagebox.askyesno(
+            "Inicio de sesión - Administración",
+            "¿Quieres iniciar sesión como administrador usando la huella digital?\n\n"
+            "Sí = Huella del administrador\nNo = Usuario y contraseña"
+        )
+
+        if usar_huella:
+            return self._login_admin_huella()
+        else:
+            return self._login_admin_user_pass()
+
+    def _login_admin_user_pass(self) -> bool:
         """Pide usuario/contraseña y valida contra .env (bcrypt). Re-lee .env por si cambió."""
         try:
             # Releer .env en cada intento
@@ -351,7 +400,6 @@ class VentanaPrincipal:
         except Exception:
             pass
 
-        # Normalizar env (quitar espacios y comillas accidentales)
         u_env = (os.getenv("ADMIN_USER") or "").strip().strip('"').strip("'")
         h_env = (os.getenv("ADMIN_PASS_HASH") or "").strip().strip('"').strip("'")
 
@@ -377,18 +425,67 @@ class VentanaPrincipal:
             return False
 
         if ok_user and ok_pass:
-            # guarda en atributos (por si se usan en runtime)
             self._admin_user = u_env
             self._admin_pass_hash = h_env
             self._admin_logged = True
             return True
 
-        # Mensaje más específico para depuración
         if not ok_user:
             messagebox.showerror("Acceso denegado", "Usuario incorrecto.")
         else:
             messagebox.showerror("Acceso denegado", "Contraseña incorrecta.")
         return False
+    
+    def _login_admin_huella(self) -> bool:
+        """
+        Inicia sesión de administrador usando la huella registrada en admin_config.
+        NO usa las huellas de alumnos.
+        """
+        try:
+            template = self.controlador.obtener_huella_admin()
+            if not template:
+                messagebox.showwarning(
+                    "Sin huella de admin",
+                    "No hay una huella de administrador registrada.\n"
+                    "Regístrala desde el Panel de Administración."
+                )
+                return False
+
+            # Armamos una "persona" ficticia para reutilizar verify_fingerprint
+            admin_persona = {
+                "id": -1,
+                "nombre": "Administrador",
+                "apellido_paterno": "",
+                "apellido_materno": "",
+                "huella_digital": template,
+            }
+            personas = [admin_persona]
+
+            matching = self.interface_api.verify_fingerprint(personas)
+
+            if not matching:
+                messagebox.showerror(
+                    "Acceso denegado",
+                    "Huella de administrador no reconocida."
+                )
+                return False
+
+            # Si llega aquí, asumimos que la huella coincide
+            self._admin_logged = True
+            self._admin_user = "admin_huella"
+            messagebox.showinfo(
+                "Acceso concedido",
+                "Sesión de administrador iniciada con huella digital."
+            )
+            return True
+
+        except Exception as e:
+            traceback.print_exc()
+            messagebox.showerror(
+                "Error",
+                f"No fue posible iniciar sesión con huella de administrador:\n{e}"
+            )
+            return False
 
     def _cerrar_sesion_admin(self):
         """Cierra sesión y destruye el panel admin si está abierto. NO toca las credenciales."""
@@ -438,6 +535,16 @@ class VentanaPrincipal:
                         on_close()
                     except Exception:
                         pass
+            tk.Button(
+                header,
+                text="Registrar huella admin",
+                bg="#2563eb",
+                fg="white",
+                font=("Arial", 10, "bold"),
+                relief="flat",
+                cursor="hand2",
+                command=self._solicitar_huella_admin_segura
+            ).pack(side="right", padx=6)
 
             tk.Button(header, text="Cerrar sesión", bg="#ef4444", fg="white",
                     font=("Arial", 10, "bold"), relief="flat", cursor="hand2",
@@ -507,7 +614,193 @@ class VentanaPrincipal:
 
         _render(top, on_close=_on_close)
         top.protocol("WM_DELETE_WINDOW", _on_close)
+   
+    def _validar_credenciales_admin_para_huella(self) -> bool:
+        """
+        Pide usuario y contraseña del administrador y valida contra .env
+        antes de permitir registrar la huella de administrador.
+        """
+        try:
+            # Releer .env por seguridad
+            try:
+                load_dotenv(os.path.abspath(ENV_PATH), override=True)
+            except:
+                pass
 
+            user_env = (os.getenv("ADMIN_USER") or "").strip()
+            pass_env = (os.getenv("ADMIN_PASS_HASH") or "").strip()
+
+            if not user_env or not pass_env:
+                messagebox.showerror(
+                    "Error de configuración",
+                    "ADMIN_USER o ADMIN_PASS_HASH no están configurados en .env"
+                )
+                return False
+
+            user = simpledialog.askstring("Confirmación", "Usuario administrador:", parent=self.ventana)
+            if user is None:
+                return False
+
+            pwd = simpledialog.askstring("Confirmación", "Contraseña:", parent=self.ventana, show="*")
+            if pwd is None:
+                return False
+
+            if user.strip().lower() != user_env.lower():
+                messagebox.showerror("Acceso denegado", "Usuario incorrecto.")
+                return False
+
+            try:
+                valido = bcrypt.checkpw(pwd.encode(), pass_env.encode())
+            except:
+                messagebox.showerror("Error", "No se pudo validar la contraseña.")
+                return False
+
+            if not valido:
+                messagebox.showerror("Acceso denegado", "Contraseña incorrecta.")
+                return False
+
+            return True
+
+        except Exception as e:
+            messagebox.showerror("Error", f"No se pudo validar el acceso:\n{e}")
+            return False
+    
+    def _abrir_modal_huella_admin(self):
+            """
+            Abre un modal para registrar (o reemplazar) la huella del administrador.
+            Usa self.interface_api.register_fingerprint como con los estudiantes.
+            """
+            modal = tk.Toplevel(self.ventana)
+            modal.title("Registrar huella del administrador")
+            modal.geometry("500x300")
+            modal.transient(self.ventana)
+            modal.grab_set()
+
+            # Centrar
+            modal.update_idletasks()
+            ancho, alto = 500, 300
+            x = (modal.winfo_screenwidth() // 2) - (ancho // 2)
+            y = (modal.winfo_screenheight() // 2) - (alto // 2)
+            modal.geometry(f"{ancho}x{alto}+{x}+{y}")
+
+            frame = tk.Frame(modal, bg="#f3f4f6")
+            frame.pack(fill="both", expand=True, padx=20, pady=20)
+
+            tk.Label(
+                frame,
+                text="Registrar / actualizar huella del administrador",
+                bg="#f3f4f6",
+                font=("Arial", 12, "bold")
+            ).pack(pady=(0, 15))
+
+            # Botón de escanear
+            icono_huella = None
+            try:
+                img = Image.open(resource_path("public/static/icons/huella-dactilar.png"))
+                img = img.resize((20, 20), Image.LANCZOS)
+                icono_huella = ImageTk.PhotoImage(img)
+            except Exception:
+                pass
+
+            btn_escanear = tk.Button(
+                frame,
+                text=" Escanear huella del administrador ",
+                font=("Arial", 11, "bold"),
+                relief="raised",
+                image=icono_huella,
+                compound="left" if icono_huella else None,
+                padx=10, pady=5,
+                cursor="hand2"
+            )
+            btn_escanear.image = icono_huella
+            btn_escanear.pack(pady=(0, 10))
+
+            lbl_estado = tk.Label(
+                frame,
+                text="Esperando huella...",
+                bg="#f3f4f6",
+                font=("Arial", 11),
+                fg="blue"
+            )
+            lbl_estado.pack(pady=(0, 10))
+
+            huella_admin = None
+
+            def finalizar_escaneo():
+                lbl_estado.config(text="Huella capturada", fg="green")
+                btn_escanear.config(state="normal")
+
+            def on_enroll(finger_idx, template):
+                nonlocal huella_admin
+                huella_admin = template
+                finalizar_escaneo()
+                print(f"[ADMIN] Huella {finger_idx} registrada. Tamaño: {len(template)} bytes")
+
+            btn_escanear.config(
+                command=lambda: self.interface_api.register_fingerprint(on_enroll=on_enroll)
+            )
+
+            # Botones Guardar / Cancelar
+            btn_frame = tk.Frame(frame, bg="#f3f4f6")
+            btn_frame.pack(pady=(20, 0))
+
+            def guardar_huella_admin():
+                if not huella_admin:
+                    messagebox.showwarning(
+                        "Sin huella",
+                        "Primero escanea la huella del administrador."
+                    )
+                    return
+
+                ok = self.controlador.guardar_huella_admin(huella_admin)
+                if ok:
+                    messagebox.showinfo(
+                        "Huella guardada",
+                        "La huella del administrador se ha registrado correctamente."
+                    )
+                    modal.destroy()
+                else:
+                    messagebox.showerror(
+                        "Error",
+                        "No se pudo guardar la huella del administrador."
+                    )
+
+            tk.Button(
+                btn_frame,
+                text="Guardar",
+                bg="#16a34a",
+                fg="white",
+                font=("Arial", 11, "bold"),
+                relief="flat",
+                cursor="hand2",
+                command=guardar_huella_admin,
+                width=12
+            ).pack(side="left", padx=5)
+
+            tk.Button(
+                btn_frame,
+                text="Cancelar",
+                bg="#ef4444",
+                fg="white",
+                font=("Arial", 11, "bold"),
+                relief="flat",
+                cursor="hand2",
+                command=modal.destroy,
+                width=12
+            ).pack(side="left", padx=5)
+    
+    def _solicitar_huella_admin_segura(self):
+        """
+        Antes de abrir el modal de registrar huella admin,
+        pide usuario y contraseña. Si no son correctos, no deja continuar.
+        """
+        if not self._validar_credenciales_admin_para_huella():
+            return
+        
+        # Si el login fue exitoso → abrir modal para registrar huella
+        self._abrir_modal_huella_admin()
+
+  #---------------------------------------#
 
     def _inicializar_ui_estudiantes(self):
         """
@@ -591,9 +884,59 @@ class VentanaPrincipal:
         # Título
         tk.Label(parent, text="Gestión de Estudiantes", bg="lightblue", fg="#1a253c",
                 font=('Arial', 24, 'bold')).place(x=30, y=30)
+        
+        # === BARRA DE BÚSQUEDA (como reportes, pero sin botón) ===
+        frame_busqueda_reg = tk.Frame(parent, bg="lightblue")
+        frame_busqueda_reg.place(relx=0.5, y=70, height=40, anchor="n")
+
+        tk.Label(
+            frame_busqueda_reg,
+            text="Buscar estudiante:",
+            bg="lightblue",
+            fg="#1a253c",
+            font=('Arial', 12)
+        ).pack(side=tk.LEFT, padx=(0, 10))
+
+        # Función que consulta al controlador (igual que en reportes)
+        def _fetch_estudiantes_reg(q):
+            try:
+                return self.controlador.buscar_estudiantes(q, limit=20)
+            except Exception as e:
+                print("Error buscando estudiantes en Registro:", e)
+                return []
+
+        # Qué hacer cuando el usuario selecciona un estudiante del listado
+        def _on_select_est_reg(item):
+            # Abre directamente la ventana de edición del estudiante
+            self._mostrar_estudiante_en_registro(item)
+
+        # Entry con autocompletado
+        self.entry_estudiante_registro = AutocompleteEntry(
+            frame_busqueda_reg,
+            fetch_callback=_fetch_estudiantes_reg,
+            on_select=_on_select_est_reg,
+            width=40
+        )
+        self.entry_estudiante_registro.pack(side=tk.LEFT)
+
+        # Placeholder opcional
+        self.entry_estudiante_registro.insert(0, "Nombre, matrícula o correo...")
+        self.entry_estudiante_registro.bind(
+            "<FocusIn>",
+            lambda e: self.entry_estudiante_registro.delete(0, "end")
+            if self.entry_estudiante_registro.get().startswith("Nombre")
+            else None
+        )
+
+        # Al presionar Enter -> buscar por texto (sin botón)
+        self.entry_estudiante_registro.bind(
+            "<Return>",
+            lambda e: self.buscar_estudiante_registro()
+        )
 
         # Botón "Nuevo Estudiante" con icono redimensionado y alineado a la izquierda del texto
-        imagen_boton = Image.open("public/static/icons/nueva-cuenta-white.png")
+        imagen_boton = Image.open(resource_path("public/static/icons/nueva-cuenta-white.png"))
+
         imagen_boton = imagen_boton.resize((24, 24), Image.LANCZOS)
         icono_boton = ImageTk.PhotoImage(imagen_boton)
         btn_nuevo = tk.Button(
@@ -629,6 +972,50 @@ class VentanaPrincipal:
             # Mostrar mensaje de carga o estado inicial
             self._mostrar_mensaje_sin_estudiantes()
 
+    def buscar_estudiante_registro(self):
+            """
+            Busca un estudiante desde la pestaña Registro y abre directamente
+            la ventana de edición. Funciona solo con Enter (no hay botón Buscar).
+            """
+            try:
+                # Cerrar popup del autocomplete si está abierto
+                try:
+                    if hasattr(self, "entry_estudiante_registro") and hasattr(self.entry_estudiante_registro, "close_popup"):
+                        self.entry_estudiante_registro.close_popup()
+                except Exception:
+                    pass
+
+                texto = (self.entry_estudiante_registro.get() or "").strip()
+                if not texto or texto.lower().startswith("nombre"):
+                    messagebox.showinfo(
+                        "Atención",
+                        "Escribe el nombre, matrícula o correo del estudiante."
+                    )
+                    return
+
+                # Buscar en la base de datos
+                resultados = self.controlador.buscar_estudiantes(texto, limit=10) or []
+
+                if len(resultados) == 0:
+                    messagebox.showinfo(
+                        "Sin resultados",
+                        f"No se encontró ningún estudiante para: “{texto}”."
+                    )
+                    return
+                elif len(resultados) == 1:
+                    seleccionado = resultados[0]
+                else:
+                    # Si hay varios, por simplicidad abrimos el primero.
+                    # (Si luego quieres, se puede hacer un dialogo para elegir uno.)
+                    seleccionado = resultados[0]
+
+                # Abrir directamente el modal de edición del estudiante encontrado
+                self._editar_estudiante(seleccionado)
+
+            except Exception as e:
+                print(f"Error al buscar estudiante en Registro: {e}")
+                traceback.print_exc()
+                messagebox.showerror("Error", f"No se pudo ejecutar la búsqueda:\n{e}")
 
     def _crear_tarjeta_estudiante(self, parent, estudiante, index):
         # Crear frame para la tarjeta
@@ -818,6 +1205,36 @@ class VentanaPrincipal:
             traceback.print_exc()
             self._mostrar_mensaje_sin_estudiantes()
 
+    def _mostrar_estudiante_en_registro(self, estudiante):
+        """
+        Muestra en Gestión de Estudiantes SOLO la tarjeta del estudiante buscado.
+        No abre el modal de edición.
+        """
+        try:
+            if not hasattr(self, "frame_estudiantes"):
+                return  # por si aún no se ha inicializado la UI
+
+            # Limpiar las tarjetas actuales
+            for widget in self.frame_estudiantes.winfo_children():
+                widget.destroy()
+
+            # Asegurarnos de tener un dict con los campos esperados
+            data = estudiante
+
+            # Actualizar la lista interna (por si luego quieres usarla)
+            self.lista_estudiantes = [data]
+
+            # Crear una única tarjeta (index 0)
+            self._crear_tarjeta_estudiante(self.frame_estudiantes, data, 0)
+
+            # Subir el scroll al inicio
+            if hasattr(self, "canvas_estudiantes"):
+                self.canvas_estudiantes.yview_moveto(0.0)
+
+        except Exception as e:
+            print(f"Error al mostrar estudiante en registro: {e}")
+            traceback.print_exc()
+
     def _mostrar_mensaje_sin_estudiantes(self):
         # Limpiar el frame de contenido
         for widget in self.frame_contenido.winfo_children():
@@ -829,7 +1246,7 @@ class VentanaPrincipal:
         
         # Icono
         try:
-            imagen = Image.open("public/static/icons/usuarios.png")
+            imagen = Image.open(resource_path("public/static/icons/usuarios.png"))
             imagen = imagen.resize((100, 100), Image.LANCZOS)
             icono_img = ImageTk.PhotoImage(imagen)
             icono = tk.Label(frame_mensaje, image=icono_img, bg="lightblue")
@@ -860,15 +1277,16 @@ class VentanaPrincipal:
         # Crear ventana modal
         modal = tk.Toplevel(self.ventana)
         modal.title("Editar Estudiante")
-        modal.geometry("650x500")
+        # ⬇⬇ ventana más cómoda ⬇⬇
+        window_width = 900
+        window_height = 520
+        modal.geometry(f"{window_width}x{window_height}")
         modal.resizable(False, False)
         modal.grab_set()
         modal.configure(bg='#f3f4f6')
 
         # Centrar
         modal.update_idletasks()
-        window_width = 650
-        window_height = 500
         x = (modal.winfo_screenwidth() // 2) - (window_width // 2)
         y = (modal.winfo_screenheight() // 2) - (window_height // 2)
         modal.geometry(f'{window_width}x{window_height}+{x}+{y}')
@@ -979,11 +1397,57 @@ class VentanaPrincipal:
         )
         combo_area.grid(row=2, column=3, padx=5, pady=5, sticky="w")
 
+        # ---------- CARRERA: COMBO + OTROS ----------
         tk.Label(form_frame, text="Carrera:", bg='#f3f4f6',
                 font=('Arial', 10, 'bold')).grid(row=3, column=2, sticky="e", padx=5, pady=5)
-        entry_carrera = tk.Entry(form_frame, textvariable=vars_data['carrera'],
-                                font=('Arial', 10), relief='solid', bd=1, bg='white', width=28)
-        entry_carrera.grid(row=3, column=3, padx=5, pady=5, sticky="w")
+
+        opciones_carrera = [
+            "Maestría en Ingeniería para la Innovación y Desarrollo Tecnológico",
+            "Doctorado en Ingeniería para la Innovación y Desarrollo Tecnológico",
+            "Otros",
+        ]
+
+        combo_carrera = ttk.Combobox(
+            form_frame,
+            font=('Arial', 10),
+            values=opciones_carrera,
+            width=26,
+            state="readonly"
+        )
+        combo_carrera.grid(row=3, column=3, padx=5, pady=5, sticky="w")
+
+        tk.Label(form_frame, text="Especifique carrera (si eligió 'Otros'):", bg='#f3f4f6',
+                font=('Arial', 10, 'bold')).grid(row=4, column=2, sticky="e", padx=5, pady=5)
+        entry_carrera_otro = tk.Entry(
+            form_frame,
+            font=('Arial', 10),
+            relief='solid', bd=1, bg='white', width=28
+        )
+        entry_carrera_otro.grid(row=4, column=3, padx=5, pady=5, sticky="w")
+        # ⬇⬇ Igual que en "nuevo estudiante": deshabilitado y vacío al inicio ⬇⬇
+        entry_carrera_otro.config(state="disabled")
+
+        def _on_carrera_change(event=None):
+            opcion = combo_carrera.get().strip()
+            if opcion == "Otros":
+                entry_carrera_otro.config(state="normal")
+                entry_carrera_otro.focus_set()
+            else:
+                entry_carrera_otro.delete(0, tk.END)
+                entry_carrera_otro.config(state="disabled")
+
+        combo_carrera.bind("<<ComboboxSelected>>", _on_carrera_change)
+
+        # Pre-seleccionar solo en el COMBO (sin tocar el entry)
+        carrera_actual = vars_data['carrera'].get().strip()
+        if carrera_actual in opciones_carrera[:2]:
+            combo_carrera.set(carrera_actual)
+        elif carrera_actual:
+            # Carrera distinta → dejamos "Otros" seleccionado,
+            # pero el campo de texto sigue vacío y deshabilitado
+            combo_carrera.set("Otros")
+        else:
+            combo_carrera.set(opciones_carrera[0])
 
         # Opcional: que las columnas se vean bien distribuidas
         for col in range(4):
@@ -1005,7 +1469,7 @@ class VentanaPrincipal:
 
         icono_huella = None
         try:
-            img = Image.open("public/static/icons/huella-dactilar.png")
+            img = Image.open(resource_path("public/static/icons/huella-dactilar.png"))
             img = img.resize((18, 18), Image.LANCZOS)
             icono_huella = ImageTk.PhotoImage(img)
         except Exception:
@@ -1037,6 +1501,15 @@ class VentanaPrincipal:
 
         # ======================= GUARDAR / CANCELAR =======================
         def guardar_cambios():
+            from tkinter import messagebox
+
+            # Carrera según selección
+            opcion = combo_carrera.get().strip()
+            if opcion == "Otros":
+                carrera = entry_carrera_otro.get().strip()
+            else:
+                carrera = opcion
+
             try:
                 ok = self.controlador.editar_estudiante(
                     estudiante_id=estudiante.get('id'),
@@ -1048,7 +1521,7 @@ class VentanaPrincipal:
                     huella_digital=huella_digital,
                     generacion=vars_data['generacion'].get(),
                     area_conocimiento=vars_data['area_conocimiento'].get(),
-                    carrera=vars_data['carrera'].get(),
+                    carrera=carrera,
                     asesor_nombre=vars_data['asesor'].get(),
                     id_asesor=self.asesores_data.get(vars_data['asesor'].get()),
                 )
@@ -1065,16 +1538,16 @@ class VentanaPrincipal:
         btn_frame.grid(row=2, column=0, columnspan=2, sticky="ew")
 
         tk.Button(
-            btn_frame, text="Guardar", bg="#4CAF50", fg="white",
-            font=('Arial', 10), relief="flat", cursor="hand2",
-            command=guardar_cambios
-        ).pack(side="right", padx=(5, 25), pady=5)
-
-        tk.Button(
             btn_frame, text="Cancelar", bg="#f44336", fg="white",
             font=('Arial', 10), relief="flat", cursor="hand2",
             command=modal.destroy
         ).pack(side="right", padx=5, pady=5)
+
+        tk.Button(
+            btn_frame, text="Guardar", bg="#4CAF50", fg="white",
+            font=('Arial', 10), relief="flat", cursor="hand2",
+            command=guardar_cambios
+        ).pack(side="right", padx=(5, 25), pady=5)
 
         def _on_canvas_configure(event):
             canvas.itemconfig("all", width=event.width)
@@ -1112,14 +1585,16 @@ class VentanaPrincipal:
     def _abrir_modal_estudiante(self):
         modal = tk.Toplevel(self.ventana)
         modal.title("Registrar Nuevo Estudiante")
-        modal.geometry("800x450")
+
+        # ⬇⬇ NUEVO TAMAÑO ⬇⬇
+        ancho = 900
+        alto = 520
+        modal.geometry(f"{ancho}x{alto}")
         modal.transient(self.ventana)
         modal.grab_set()
 
         # Centrar el modal en la pantalla
         modal.update_idletasks()
-        ancho = 800
-        alto = 450
         x = (modal.winfo_screenwidth() // 2) - (ancho // 2)
         y = (modal.winfo_screenheight() // 2) - (alto // 2)
         modal.geometry(f"{ancho}x{alto}+{x}+{y}")
@@ -1127,15 +1602,22 @@ class VentanaPrincipal:
         # Configurar el grid principal
         modal.grid_columnconfigure(0, weight=1)
         modal.grid_columnconfigure(1, weight=1)
+        modal.grid_rowconfigure(0, weight=0)  # formulario
+        modal.grid_rowconfigure(1, weight=0)  # huella
+        modal.grid_rowconfigure(2, weight=0)  # botón
 
         # Estilos
         estilo_label = {'font': ('Arial', 11), 'anchor': 'w', 'padx': 5, 'pady': 2}
         estilo_entry = {'font': ('Arial', 11), 'width': 25}
         estilo_combobox = {'font': ('Arial', 11), 'width': 27}
 
-        # Frame principal
+        # Frame principal del formulario
         form_frame = tk.Frame(modal, padx=20, pady=10)
         form_frame.grid(row=0, column=0, columnspan=2, sticky="nsew")
+
+        # Que las 4 columnas internas se repartan bien
+        for c in range(4):
+            form_frame.grid_columnconfigure(c, weight=1)
 
         # Título
         tk.Label(
@@ -1143,7 +1625,7 @@ class VentanaPrincipal:
             text="Registrar Nuevo Estudiante",
             font=('Arial', 16, 'bold'),
             pady=10
-        ).grid(row=0, column=0, columnspan=2)
+        ).grid(row=0, column=0, columnspan=4)
 
         # Helper para crear campos
         def crear_campo(frame, label_text, row, column, widget_type='entry', options=None):
@@ -1184,7 +1666,6 @@ class VentanaPrincipal:
             [asesor['name'] for asesor in asesores]
         )
 
-        # Guardar los datos de los asesores (nombre -> id)
         self.asesores_data = {asesor['name']: asesor['id'] for asesor in asesores}
 
         areas = self.controlador.obtener_areas_conocimiento()
@@ -1193,10 +1674,36 @@ class VentanaPrincipal:
             [area['nombre'] for area in areas]
         )
 
-        entry_carrera = crear_campo(form_frame, "Carrera:", 5, 1)
+        # --------- CARRERA: COMBO + "OTROS" ---------
+        opciones_carrera = [
+            "Maestría en Ingeniería para la Innovación y Desarrollo Tecnológico",
+            "Doctorado en Ingeniería para la Innovación y Desarrollo Tecnológico",
+            "Otros",
+        ]
 
-        # Padding entre columnas
-        form_frame.grid_columnconfigure(1, pad=20)
+        combo_carrera = crear_campo(
+            form_frame, "Carrera:", 5, 1, 'combobox', opciones_carrera
+        )
+        combo_carrera.state(["readonly"])
+
+        entry_carrera_otro = crear_campo(
+            form_frame,
+            "Especifique carrera (si eligió 'Otros'):",
+            6, 1,
+            'entry'
+        )
+        entry_carrera_otro.config(state="disabled")
+
+        def _on_carrera_change(event=None):
+            opcion = combo_carrera.get().strip()
+            if opcion == "Otros":
+                entry_carrera_otro.config(state="normal")
+                entry_carrera_otro.focus_set()
+            else:
+                entry_carrera_otro.delete(0, "end")
+                entry_carrera_otro.config(state="disabled")
+
+        combo_carrera.bind("<<ComboboxSelected>>", _on_carrera_change)
 
         # --------------------------
         # Sección de huella digital
@@ -1253,14 +1760,16 @@ class VentanaPrincipal:
             nombre = entry_nombre.get().strip()
             apellido_p = entry_apellido_p.get().strip()
             apellido_m = entry_apellido_m.get().strip()
-            matricula = entry_matricula.get().strip()          # <-- TEXTO (conserva ceros)
+            matricula = entry_matricula.get().strip()
             generacion = self.combo_generacion.get().strip()
             nombre_asesor = combo_asesor.get().strip()
             id_asesor = self.asesores_data.get(nombre_asesor)
             area_conocimiento = combo_area.get().strip()
-            carrera = entry_carrera.get().strip()
 
-            # Validación básica
+            opcion_carrera = combo_carrera.get().strip()
+            carrera_otro = entry_carrera_otro.get().strip()
+            carrera = carrera_otro if opcion_carrera == "Otros" else opcion_carrera
+
             if not all([
                 email, matricula, nombre, apellido_p, apellido_m,
                 generacion, nombre_asesor, id_asesor, area_conocimiento, carrera
@@ -1268,21 +1777,44 @@ class VentanaPrincipal:
                 messagebox.showwarning("Campos vacíos", "Por favor, completa todos los campos.")
                 return
 
-            # Matrícula numérica, pero en TEXTO (permite '0' y ceros a la izquierda)
             if not matricula.isdigit():
                 messagebox.showerror("Error", "La matrícula debe contener solo números.")
                 return
 
-            # Registrar y manejar duplicado
+            patron_correo = r'^[\w\.-]+@[\w\.-]+\.\w+$'
+            if not re.match(patron_correo, email):
+                messagebox.showerror(
+                    "Correo inválido",
+                    "El correo no tiene un formato válido.\nEjemplo: usuario@dominio.com"
+                )
+                entry_email.focus_set()
+                return
+
             res = self.controlador.registrar_estudiante(
                 email, matricula, nombre, apellido_p, apellido_m,
                 huella_digital, generacion, area_conocimiento,
                 carrera, nombre_asesor, id_asesor
             )
 
-            if res == "duplicado":
-                messagebox.showwarning("Duplicado", f"La matrícula {matricula} ya está registrada.")
+            if res in ("duplicado_matricula", "duplicado"):
+                messagebox.showwarning(
+                    "Matrícula duplicada",
+                    f"La matrícula {matricula} ya está registrada."
+                )
                 entry_matricula.focus_set()
+                return
+            elif res == "duplicado_email":
+                messagebox.showwarning(
+                    "Correo ya registrado",
+                    f"El correo {email} ya está registrado para otro estudiante."
+                )
+                entry_email.focus_set()
+                return
+            elif res == "duplicado_huella":
+                messagebox.showwarning(
+                    "Huella ya registrada",
+                    "La huella capturada ya está asociada a otro estudiante."
+                )
                 return
             elif res is True:
                 messagebox.showinfo(
@@ -1296,10 +1828,12 @@ class VentanaPrincipal:
                     f"Carrera: {carrera}"
                 )
                 self._cargar_estudiantes_en_vista()
-                self.cargar_estudiantes_reportes()
                 modal.destroy()
             else:
-                messagebox.showerror("Error", "No se pudo registrar el estudiante.")
+                messagebox.showerror(
+                    "Error",
+                    "Ocurrió un error al registrar al estudiante."
+                )
 
         # --------------------------
         # Botón registrar
@@ -1351,14 +1885,14 @@ class VentanaPrincipal:
         main_frame.pack(fill="both", expand=True, padx=10, pady=0)
 
         # Panel izquierdo: Lector de Huella Digital
-        panel_lector = tk.Frame(main_frame, height=250, width=400, bg="white", bd=2, relief="groove")
+        panel_lector = tk.Frame(main_frame, height=350, width=400, bg="white", bd=2, relief="groove")
         panel_lector.grid(row=0, column=0, padx=10, pady=10, sticky="nw")
         panel_lector.pack_propagate(False)  # Esto evita que el frame se ajuste a su contenido
         tk.Label(panel_lector, text="🖐 Lector de Huella Digital", font=("Arial", 14, "bold"), bg="white", fg="#1565c0").pack(anchor="w", padx=10, pady=10)
 
         # Icono huella
         try:
-            img = Image.open("public/static/icons/huella-dactilar.png")
+            img = Image.open(resource_path("public/static/icons/huella-dactilar.png"))
             img = img.resize((100, 100), Image.LANCZOS)
             icono_huella = ImageTk.PhotoImage(img)
             tk.Label(panel_lector, image=icono_huella, bg="white").pack(pady=10)
@@ -1474,6 +2008,20 @@ class VentanaPrincipal:
                                 bg="#2563eb", fg="white", relief="flat", height=2, cursor="hand2",
                                 command=manejar_verificacion_huella)
         btn_escanear.pack(fill="x", padx=10, pady=10)
+        
+         # NUEVO: Botón Incidencias (debajo del lector)
+        btn_incidencias = tk.Button(
+            panel_lector,
+            text="Incidencias",
+            font=("Arial", 11, "bold"),
+            bg="#f97316",
+            fg="white",
+            relief="flat",
+            height=2,
+            cursor="hand2",
+            command=self._abrir_modal_incidencias   # función que abre el modal
+        )
+        btn_incidencias.pack(fill="x", padx=10, pady=(0, 10))
 
         # Panel derecho: Asistencias de Hoy
         self.panel_asistencias = tk.Frame(main_frame, bg="white", bd=2, relief="groove")
@@ -1546,7 +2094,274 @@ class VentanaPrincipal:
         main_frame.grid_columnconfigure(0, minsize=300)
         main_frame.grid_rowconfigure(0, weight=1)
 
-    
+    def _abrir_modal_incidencias(self):
+        """
+        1) Pide huella de la persona.
+        2) Muestra sus asistencias con entrada pero sin salida.
+        3) Permite registrar salida manual + motivo de incidencia.
+        """
+        from tkinter import ttk
+        import datetime
+
+        # 1. Verificar huella de la persona
+        try:
+            personas = self.controlador.obtener_estudiantes_para_asistencia()
+        except Exception as e:
+            messagebox.showerror("Error", f"No se pudieron obtener las huellas:\n{e}")
+            return
+
+        if not personas:
+            messagebox.showwarning("Sin datos", "No hay personas con huella registrada.")
+            return
+
+        try:
+            matching = self.interface_api.verify_fingerprint(personas)
+        except Exception as e:
+            messagebox.showerror("Error", f"Error al verificar la huella:\n{e}")
+            return
+
+        if not matching:
+            messagebox.showerror("Acceso denegado", "Huella no reconocida.")
+            return
+
+        alumno_id = matching.get("id") or matching.get("alumno_id")
+        if not alumno_id:
+            messagebox.showerror("Error", "No se pudo identificar al alumno asociado a la huella.")
+            return
+
+        # 2. Obtener asistencias sin salida
+        asistencias = self.controlador.obtener_asistencias_sin_salida_por_alumno(alumno_id)
+        if not asistencias:
+            messagebox.showinfo(
+                "Incidencias",
+                "Esta persona no tiene asistencias con entrada sin salida registrada."
+            )
+            return
+
+        # 3. Crear modal
+        modal = tk.Toplevel(self.ventana)
+        modal.title("Incidencias - Salida manual")
+        modal.geometry("650x400")
+        modal.transient(self.ventana)
+        modal.grab_set()
+
+        # Centrar
+        modal.update_idletasks()
+        ancho, alto = 650, 400
+        x = (modal.winfo_screenwidth() // 2) - (ancho // 2)
+        y = (modal.winfo_screenheight() // 2) - (alto // 2)
+        modal.geometry(f"{ancho}x{alto}+{x}+{y}")
+
+        frame = tk.Frame(modal, bg="#f3f4f6")
+        frame.pack(fill="both", expand=True, padx=10, pady=10)
+
+        tk.Label(
+            frame,
+            text="Asistencias con entrada sin salida",
+            bg="#f3f4f6",
+            font=("Arial", 12, "bold")
+        ).pack(anchor="w", pady=(0, 10))
+
+        # Treeview con asistencias
+        from tkinter import ttk
+        cols = ("id", "fecha", "hora_entrada", "hora_salida", "motivo_incidencia")
+        tv = ttk.Treeview(frame, columns=cols, show="headings", height=6)
+        tv.heading("id", text="ID")
+        tv.heading("fecha", text="Fecha")
+        tv.heading("hora_entrada", text="Hora entrada")
+        tv.heading("hora_salida", text="Hora salida")
+        tv.heading("motivo_incidencia", text="Motivo incidencia")
+
+        tv.column("id", width=50, anchor="center")
+        tv.column("fecha", width=90, anchor="center")
+        tv.column("hora_entrada", width=90, anchor="center")
+        tv.column("hora_salida", width=90, anchor="center")
+        tv.column("motivo_incidencia", width=200, anchor="w")
+
+        tv.pack(fill="x", padx=5)
+
+        # Cargar datos
+        def cargar_asistencias():
+            tv.delete(*tv.get_children())
+            for a in asistencias:
+                tv.insert(
+                    "",
+                    "end",
+                    values=(
+                        a["id"],
+                        a["fecha"],
+                        a.get("hora_entrada") or "",
+                        a.get("hora_salida") or "",
+                        a.get("motivo_incidencia") or "",
+                    )
+                )
+
+        cargar_asistencias()
+
+        # Área de edición salida + motivo
+        edit_frame = tk.Frame(frame, bg="#f3f4f6")
+        edit_frame.pack(fill="x", pady=(15, 0))
+
+        tk.Label(
+            edit_frame,
+            text="Hora de salida (automática):",
+            bg="#f3f4f6",
+            font=("Arial", 10)
+        ).grid(row=0, column=0, sticky="w", padx=(0, 5), pady=2)
+
+        # Entrada SOLO lectura (se llena automática)
+        entry_hora_salida = tk.Entry(edit_frame, width=10, font=("Arial", 10), state="readonly")
+        entry_hora_salida.grid(row=0, column=1, sticky="w", pady=2)
+
+        tk.Label(
+            edit_frame,
+            text="Motivo de incidencia:",
+            bg="#f3f4f6",
+            font=("Arial", 10)
+        ).grid(row=1, column=0, sticky="w", padx=(0, 5), pady=2)
+
+        motivos = [
+            "Vista de campo (obra)",
+            "Coordinación cerrada",
+            "Clases en línea",
+        ]
+        combo_motivo = ttk.Combobox(
+            edit_frame,
+            values=motivos,
+            state="readonly",
+            width=30
+        )
+        combo_motivo.grid(row=1, column=1, sticky="w", pady=2)
+
+        # --- Autocompletar hora de salida al seleccionar un motivo ---
+        def autocompletar_hora_salida(event=None):
+            sel = tv.selection()
+            if not sel:
+                return
+
+            item = tv.item(sel[0])
+            values = item.get("values", [])
+            if len(values) < 3:
+                return
+
+            hora_ent_str = str(values[2]).strip()  # columna "hora_entrada"
+            if not hora_ent_str:
+                return
+
+            try:
+                # Soportar HH:MM o HH:MM:SS
+                if len(hora_ent_str) == 5:
+                    dt_ent = datetime.datetime.strptime(hora_ent_str, "%H:%M")
+                else:
+                    dt_ent = datetime.datetime.strptime(hora_ent_str, "%H:%M:%S")
+
+                # Sumar 8 horas
+                dt_sal = dt_ent + datetime.timedelta(hours=8)
+
+                # Límite máximo: 19:00 (7 PM)
+                limite = dt_ent.replace(hour=19, minute=0, second=0)
+                if dt_sal > limite:
+                    dt_sal = limite
+
+                hora_auto = dt_sal.strftime("%H:%M:%S")
+
+                # Escribir en entry readonly
+                entry_hora_salida.config(state="normal")
+                entry_hora_salida.delete(0, tk.END)
+                entry_hora_salida.insert(0, hora_auto)
+                entry_hora_salida.config(state="readonly")
+
+            except Exception:
+                pass
+
+        combo_motivo.bind("<<ComboboxSelected>>", autocompletar_hora_salida)
+
+        def guardar_salida_manual():
+            sel = tv.selection()
+            if not sel:
+                messagebox.showwarning(
+                    "Selecciona una asistencia",
+                    "Primero selecciona una asistencia de la lista."
+                )
+                return
+
+            item = tv.item(sel[0])
+            values = item.get("values", [])
+            if not values:
+                messagebox.showerror(
+                    "Error",
+                    "No se pudo obtener la información de la asistencia seleccionada."
+                )
+                return
+
+            asistencia_id = values[0]
+
+            motivo = combo_motivo.get().strip()
+            if not motivo:
+                messagebox.showwarning(
+                    "Motivo de incidencia",
+                    "Debes seleccionar un motivo de incidencia."
+                )
+                return
+
+            hora_salida = entry_hora_salida.get().strip()
+            if not hora_salida:
+                messagebox.showwarning(
+                    "Hora de salida",
+                    "Selecciona un motivo para que se calcule la hora de salida automática."
+                )
+                return
+
+            ok = self.controlador.registrar_salida_manual_con_incidencia(
+                asistencia_id,
+                hora_salida,
+                motivo
+            )
+            if ok:
+                messagebox.showinfo(
+                    "Salida registrada",
+                    "La salida manual y el motivo de incidencia se han guardado correctamente."
+                )
+                for a in asistencias:
+                    if a["id"] == asistencia_id:
+                        a["hora_salida"] = hora_salida
+                        a["motivo_incidencia"] = motivo
+                cargar_asistencias()
+            else:
+                messagebox.showerror(
+                    "Error",
+                    "No se pudo guardar la salida manual con incidencia."
+                )
+
+        # ====== BOTONES INFERIORES (GUARDAR / SALIR) ======
+        btn_frame = tk.Frame(frame, bg="#f3f4f6")
+        btn_frame.pack(fill="x", pady=(25, 5), anchor="s")
+
+        btn_guardar = tk.Button(
+            btn_frame,
+            text="Guardar",
+            bg="#16a34a",
+            fg="white",
+            font=("Arial", 11, "bold"),
+            relief="flat",
+            cursor="hand2",
+            command=guardar_salida_manual
+        )
+        btn_guardar.pack(side="left", padx=(10, 40), pady=5)
+
+        btn_cerrar = tk.Button(
+            btn_frame,
+            text="Salir",
+            bg="#e11d48",
+            fg="white",
+            font=("Arial", 11, "bold"),
+            relief="flat",
+            cursor="hand2",
+            command=modal.destroy
+        )
+        btn_cerrar.pack(side="right", padx=(9, 10), pady=5)
+
+
     def _registrar_salida(self, registro_id, item_id):
         """
         Maneja el evento de clic en el botón de registrar salida.
@@ -1791,7 +2606,7 @@ class VentanaPrincipal:
         win.geometry(f"+{x}+{y}")
 
         # Cerrar solo
-        win.after(1000, win.destroy)
+        win.after(2000, win.destroy)
 
 
 # ---------------------------------------- Contenido de la pestaña reportes ----------------------------------------
@@ -2025,7 +2840,7 @@ class VentanaPrincipal:
 
         # Cargar y mostrar el ícono
         try:
-            imagen = Image.open("public/static/icons/informe.png")
+            imagen = Image.open(resource_path("public/static/icons/informe.png"))
             imagen = imagen.resize((100, 100), Image.LANCZOS)
             self.icono_reporte = ImageTk.PhotoImage(imagen)
             icono_label = tk.Label(self.frame_mensaje_central, image=self.icono_reporte, bg="lightblue")
@@ -2653,9 +3468,10 @@ class VentanaPrincipal:
                 # ------------------ EXPORTAR SEGÚN EXTENSIÓN ------------------
                 try:
                     if file_path.lower().endswith(".pdf"):
-                        # Si quieres, puedes enriquecer meta con estad/filtros, pero tu
-                        # _generar_pdf_alumno ya soporta el meta simple, así que lo usamos tal cual.
-                        self._generar_pdf_alumno(meta, dest_path=file_path)
+                        # PDF individual (meta enriquecido con estadísticas)
+                        meta_con_estad = dict(meta)
+                        meta_con_estad["estad"] = estadisticas
+                        self._generar_pdf_alumno(meta_con_estad, dest_path=file_path)
                         messagebox.showinfo("Exportación individual", f"PDF generado:\n{file_path}")
 
                     elif file_path.lower().endswith(".xlsx"):
@@ -2716,7 +3532,7 @@ class VentanaPrincipal:
                             ws[f"A{row_idx}"].alignment = alignment
                             ws[f"B{row_idx}"].alignment = alignment
 
-                        # 3. Estadísticas
+                        # 3. Estadísticas (todas como texto HH:MM:SS)
                         ws.append([])  # espacio
                         stats_title_row = 11
                         ws.merge_cells(f"A{stats_title_row}:B{stats_title_row}")
@@ -2728,10 +3544,10 @@ class VentanaPrincipal:
                         ws[f"B{stats_title_row}"].border = border
 
                         estadisticas_data = [
-                            ["Promedio semanal (hrs):", float(estadisticas.get("promedio_semanal", 0))],
-                            ["Promedio mensual (hrs):", float(estadisticas.get("promedio_mensual", 0))],
-                            ["Hora más frecuente de entrada:", estadisticas.get("hora_entrada_frecuente", "--:--")],
-                            ["Hora más frecuente de salida:", estadisticas.get("hora_salida_frecuente", "--:--")]
+                            ["Promedio semanal (hrs):",   estadisticas.get("promedio_semanal", "00:00:00")],
+                            ["Promedio mensual (hrs):",   estadisticas.get("promedio_mensual", "00:00:00")],
+                            ["Hora más frecuente de entrada:", estadisticas.get("hora_entrada_frecuente", "--:--:--")],
+                            ["Hora más frecuente de salida:",  estadisticas.get("hora_salida_frecuente", "--:--:--")],
                         ]
 
                         start_row = stats_title_row + 1
@@ -2744,23 +3560,27 @@ class VentanaPrincipal:
                             ws[f"B{row_idx}"].border = border
                             ws[f"A{row_idx}"].alignment = alignment
                             ws[f"B{row_idx}"].alignment = alignment
-                            if isinstance(row_data[1], (int, float)):
-                                ws[f"B{row_idx}"].number_format = "0.00"
+                            # ya NO aplicamos number_format, vienen como texto HH:MM:SS
 
-                        # 4. Historial detallado
-                        ws.append([]) 
+                        # 4. Historial detallado (CON INCIDENCIAS)
+                        ws.append([])
                         titulo_historial_row = ws.max_row + 1
-                        ws.merge_cells(start_row=titulo_historial_row, start_column=1,end_row=titulo_historial_row, end_column=4)
+                        # historial usa 5 columnas (A..E)
+                        ws.merge_cells(
+                            start_row=titulo_historial_row,
+                            start_column=1,
+                            end_row=titulo_historial_row,
+                            end_column=5
+                        )
                         cell_titulo = ws.cell(row=titulo_historial_row, column=1)
                         cell_titulo.value = "HISTORIAL DETALLADO DE ASISTENCIA"
                         cell_titulo.font = header_font
                         cell_titulo.fill = header_fill
                         cell_titulo.alignment = Alignment(horizontal="center")
-
-                        for col in range(1, 5):
+                        for col in range(1, 6):
                             ws.cell(row=titulo_historial_row, column=col).border = border
 
-                        encabezados = ["Fecha", "Hora de Entrada", "Hora de Salida", "Horas Presentes"]
+                        encabezados = ["Fecha", "Hora de Entrada", "Hora de Salida", "Horas Presentes", "Incidencia"]
                         header_row = ws.max_row + 1
                         ws.append(encabezados)
 
@@ -2771,25 +3591,55 @@ class VentanaPrincipal:
                             cell.border = border
                             cell.alignment = Alignment(horizontal="center")
 
-                        if historial and isinstance(historial, list) and (len(historial) == 0 or isinstance(historial[0], dict)):
+                        if historial and isinstance(historial, list) and (
+                            len(historial) == 0 or isinstance(historial[0], dict)
+                        ):
                             for reg in historial:
                                 row = [
                                     reg.get("fecha", "--/--/----"),
-                                    reg.get("hora_entrada", "--:--"),
-                                    reg.get("hora_salida", "--:--"),
-                                    float(reg.get("horas_presentes", 0))
+                                    reg.get("hora_entrada", "--:--:--"),
+                                    reg.get("hora_salida", "--:--:--"),
+                                    reg.get("horas_presentes", "00:00:00"),  # ya viene HH:MM:SS
+                                    reg.get("motivo_incidencia", ""),        # motivo seleccionado en incidencias
                                 ]
                                 ws.append(row)
                         else:
-                            ws.append(["--/--/----", "--:--", "--:--", 0.0])
+                            ws.append(["--/--/----", "--:--:--", "--:--:--", "00:00:00", ""])
 
-                        for row_idx in range(header_row, ws.max_row + 1):
-                            for col_idx in range(1, 5):
+                        # Bordes + formato + color en salidas manuales
+                        from openpyxl.styles import PatternFill
+
+                        for row_idx in range(header_row + 1, ws.max_row + 1):
+                            for col_idx in range(1, 6):
                                 cell = ws.cell(row=row_idx, column=col_idx)
                                 cell.border = border
                                 cell.alignment = alignment
-                                if col_idx == 4 and isinstance(cell.value, (int, float)):
-                                    cell.number_format = "0.00"
+
+                            # Columna 5 = Incidencia → si tiene texto, pintamos SOLO la celda de Hora de salida (col 3)
+                            cell_inc = ws.cell(row=row_idx, column=5)
+                            if isinstance(cell_inc.value, str) and cell_inc.value.strip():
+                                cell_salida = ws.cell(row=row_idx, column=3)  # Hora de salida
+                                cell_salida.fill = PatternFill(
+                                    start_color="FFF59D",  # amarillo suave
+                                    end_color="FFF59D",
+                                    fill_type="solid"
+                                )
+
+                        # 5. Leyenda de motivos de incidencias
+                        leyenda_row = ws.max_row + 2
+                        ws.merge_cells(
+                            start_row=leyenda_row,
+                            start_column=1,
+                            end_row=leyenda_row,
+                            end_column=5
+                        )
+                        cell_leyenda = ws.cell(row=leyenda_row, column=1)
+                        cell_leyenda.value = (
+                            "Motivo de incidencias (solo cuando aplique): "
+                            "Vista de campo (obra), Coordinación cerrada, Clases en línea."
+                        )
+                        cell_leyenda.font = Font(italic=True, size=10)
+                        cell_leyenda.alignment = Alignment(horizontal="left")
 
                         # Ajustar anchos
                         for col in ws.columns:
@@ -2866,10 +3716,14 @@ class VentanaPrincipal:
             from openpyxl import Workbook
             from openpyxl.styles import Font, PatternFill, Border, Side
             wb = Workbook()
-            ws = wb.active; ws.title = f"Gen {gen}"
+            ws = wb.active
+            ws.title = f"Gen {gen}"
             header_font = Font(bold=True, color="FFFFFF", size=12)
             header_fill = PatternFill(start_color="4F81BD", end_color="4F81BD", fill_type="solid")
-            border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
+            border = Border(
+                left=Side(style='thin'), right=Side(style='thin'),
+                top=Side(style='thin'), bottom=Side(style='thin')
+            )
 
             ws.merge_cells('A1:I1')
             ws["A1"] = f"REPORTE DE ASISTENCIAS — Generación {gen} — {mes_nombre} {anio}"
@@ -2877,7 +3731,9 @@ class VentanaPrincipal:
 
             for j, h in enumerate(headers, start=1):
                 c = ws.cell(row=2, column=j, value=h)
-                c.font = header_font; c.fill = header_fill; c.border = border
+                c.font = header_font
+                c.fill = header_fill
+                c.border = border
 
             r = 3
             for row in data:
@@ -2895,16 +3751,17 @@ class VentanaPrincipal:
         elif file_path.endswith(".pdf"):
             from fpdf import FPDF
             pdf = FPDF()
-            pdf.add_page(); pdf.set_font("Arial", "B", 14)
+            pdf.add_page()
+            pdf.set_font("Arial", "B", 14)
             pdf.cell(0, 10, f"REPORTE — Gen {gen} — {mes_nombre} {anio}", ln=True, align="C")
             pdf.ln(5)
             pdf.set_font("Arial", "B", 10)
             for h in headers:
-                pdf.cell(22 if h=="MATRÍCULA" else 40, 8, h, border=1, align="C")
+                pdf.cell(22 if h == "MATRÍCULA" else 40, 8, h, border=1, align="C")
             pdf.ln(8)
             pdf.set_font("Arial", "", 9)
             for row in data:
-                widths = [22,40,25,35,35,35,18,20,20]
+                widths = [22, 40, 25, 35, 35, 35, 18, 20, 20]
                 for val, w in zip(row, widths):
                     pdf.cell(w, 8, str(val), border=1)
                 pdf.ln(8)
@@ -2917,10 +3774,10 @@ class VentanaPrincipal:
 
 
 
-    
     def _generar_pdf_alumno(self, meta: dict, carpeta_salida: str = None, dest_path: str = None) -> str:
         """
         Genera un PDF individual para el alumno usando el diseño de fondo.
+        Incluye columna de Incidencias y leyenda de motivos.
         """
 
         def slugify(s):
@@ -2985,17 +3842,16 @@ class VentanaPrincipal:
 
         # Fondo
         posibles_rutas = [
-            os.path.join("public", "static", "images", "diseño.png"),
-            os.path.join("public", "static", "images", "diseno.png"),
-            "diseño.png",
-            "diseno.png",
+            resource_path(os.path.join("public", "static", "images", "diseno.png")),
+            resource_path(os.path.join("public", "static", "images", "diseño.png")),
         ]
         try:
             for ruta_img in posibles_rutas:
                 if os.path.exists(ruta_img):
                     pdf.image(ruta_img, x=0, y=0, w=page_w, h=page_h)
                     break
-        except:
+        except Exception as e:
+            print(f"Error al cargar membrete PDF: {e}")
             pass
 
         # Título
@@ -3016,7 +3872,7 @@ class VentanaPrincipal:
         line_h = 7
 
         left_x = 15
-        right_x = 120      # más a la izquierda para mayor espacio
+        right_x = 120
         margin_r = 15
 
         left_w = right_x - left_x - 5
@@ -3040,7 +3896,7 @@ class VentanaPrincipal:
         pdf.multi_cell(right_w, line_h, f"Asesor: {asesor}")
         y = max(y + line_h, pdf.get_y())
 
-        # 3️⃣ Área / Carrera (carrera con salto automático)
+        # 3️⃣ Área / Carrera
         pdf.set_xy(left_x, y)
         pdf.cell(left_w, line_h, f"Área: {area}", ln=0)
 
@@ -3068,10 +3924,12 @@ class VentanaPrincipal:
         pdf.cell(0, line_h, "Historial de Asistencias", ln=True)
         pdf.ln(2)
 
-        # Tabla
+        # ------------------------------------------------------------
+        # Tabla con columna extra "Incidencia"
+        # ------------------------------------------------------------
         pdf.set_font("Arial", "B", 10)
-        col_w = [40, 40, 40, 40]
-        headers = ["Fecha", "Hora Entrada", "Hora Salida", "Horas Presentes"]
+        col_w = [35, 35, 35, 35, 50]
+        headers = ["Fecha", "Hora Entrada", "Hora Salida", "Horas Presentes", "Incidencia"]
         ALTURA_FILA = 7
 
         for w, h in zip(col_w, headers):
@@ -3096,18 +3954,49 @@ class VentanaPrincipal:
                     pass
 
                 pdf.set_y(50)
-
                 pdf.set_font("Arial", "B", 10)
                 for w, h in zip(col_w, headers):
                     pdf.cell(w, 8, h, border=1, align="C")
                 pdf.ln(8)
                 pdf.set_font("Arial", "", 9)
 
-            pdf.cell(col_w[0], ALTURA_FILA, str(reg.get("fecha", "")), border=1, align="C")
-            pdf.cell(col_w[1], ALTURA_FILA, str(reg.get("hora_entrada", "")), border=1, align="C")
-            pdf.cell(col_w[2], ALTURA_FILA, str(reg.get("hora_salida", "")), border=1, align="C")
-            pdf.cell(col_w[3], ALTURA_FILA, str(reg.get("horas_presentes", "")), border=1, align="C")
+            fecha_txt  = str(reg.get("fecha", ""))
+            ent_txt    = str(reg.get("hora_entrada", ""))
+            sal_txt    = str(reg.get("hora_salida", ""))
+            horas_txt  = str(reg.get("horas_presentes", ""))
+            motivo     = str(reg.get("motivo_incidencia", "") or "")
+            hay_incid  = bool(motivo)
+
+            # Fecha
+            pdf.cell(col_w[0], ALTURA_FILA, fecha_txt, border=1, align="C")
+            # Hora entrada
+            pdf.cell(col_w[1], ALTURA_FILA, ent_txt, border=1, align="C")
+
+            # 🟡 Hora salida (solo esta celda se pinta cuando fue manual)
+            if hay_incid:
+                pdf.set_fill_color(255, 230, 153)  # amarillo claro
+                pdf.cell(col_w[2], ALTURA_FILA, sal_txt, border=1, align="C", fill=True)
+                pdf.set_fill_color(255, 255, 255)
+            else:
+                pdf.cell(col_w[2], ALTURA_FILA, sal_txt, border=1, align="C")
+
+            # Horas presentes
+            pdf.cell(col_w[3], ALTURA_FILA, horas_txt, border=1, align="C")
+            # Incidencia (solo texto, sin color)
+            pdf.cell(col_w[4], ALTURA_FILA, motivo, border=1, align="C")
+
             pdf.ln(ALTURA_FILA)
+        # ------------------------------------------------------------
+        # Leyenda de motivos de incidencias
+        # ------------------------------------------------------------
+        pdf.ln(5)
+        pdf.set_font("Arial", "I", 9)
+        pdf.multi_cell(
+            0,
+            5,
+            "Motivo de incidencias (solo cuando aplique): "
+            "Vista de campo (obra), Coordinación cerrada, Clases en línea."
+        )
 
         # Firma
         FIRMA_ALTURA = 22
@@ -3155,15 +4044,16 @@ class VentanaPrincipal:
         pdf.output(dest_path)
         return dest_path
 
+        
 
     def _enviar_reporte_generacion_por_correo(self, top):
         """
         Genera y envía por correo un PDF individual a cada alumno (seleccionados o todos).
         Se ejecuta en un hilo secundario para no congelar la interfaz.
         """
-        import threading
-        import tempfile, shutil, time
-        from tkinter import messagebox
+        #import threading
+        #import tempfile, shutil, time
+        #from tkinter import messagebox
 
         # Aviso rápido (no bloqueante) de que empezó el envío
         if hasattr(self, "mostrar_notificacion_rapida"):
@@ -3184,11 +4074,32 @@ class VentanaPrincipal:
                         0,
                         lambda: messagebox.showerror(
                             "Correo no disponible",
-                            "No se encontró config.emailer.send_mail. Configura config/.env y config/emailer.py."
+                            "No se encontró config.emailer.send_mail."
+                            "Configura config/.env y config/emailer.py."
                         )
                     )
                     return
+                # --------- COMPROBAR CONEXIÓN A INTERNET ---------
+                def hay_internet(host="8.8.8.8", port=53, timeout=3):
+                    try:
+                        socket.setdefaulttimeout(timeout)
+                        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                        s.connect((host, port))
+                        s.close()
+                        return True
+                    except OSError:
+                        return False
 
+                if not hay_internet():
+                    self.ventana.after(
+                        0,
+                        lambda: messagebox.showerror(
+                            "Sin conexión a la red",
+                            "No hay conexión a Internet.\n"
+                            "Verifica tu red y vuelve a intentar enviar los reportes."
+                        )
+                    )
+                    return
                 # Validación de datos cargados
                 if not hasattr(self, "_tv_gen") or not hasattr(self, "_gen_row_meta"):
                     self.ventana.after(
@@ -3422,6 +4333,9 @@ class VentanaPrincipal:
                     messagebox.showerror("Error", f"No se pudo generar el PDF:\n{e}")
 
             def _exportar_excel_core():
+                
+              
+
                 nombre_sugerido = f"reporte_{estudiante.get('matricula','nombre')}_{seleccion}.xlsx".replace(" ", "_")
                 ruta_xls = filedialog.asksaveasfilename(
                     defaultextension=".xlsx",
@@ -3441,10 +4355,12 @@ class VentanaPrincipal:
                 header_fill = PatternFill(start_color="4F81BD", end_color="4F81BD", fill_type="solid")
                 subheader_font = Font(bold=True, color="000000", size=11)
                 subheader_fill = PatternFill(start_color="DCE6F1", end_color="DCE6F1", fill_type="solid")
-                border = Border(left=Side(style='thin'),
-                                right=Side(style='thin'),
-                                top=Side(style='thin'),
-                                bottom=Side(style='thin'))
+                border = Border(
+                    left=Side(style='thin'),
+                    right=Side(style='thin'),
+                    top=Side(style='thin'),
+                    bottom=Side(style='thin')
+                )
                 alignment = Alignment(horizontal="left", vertical="center")
 
                 # 1. ENCABEZADO
@@ -3483,7 +4399,7 @@ class VentanaPrincipal:
                     ws[f'A{row}'].alignment = alignment
                     ws[f'B{row}'].alignment = alignment
 
-                # 3. ESTADÍSTICAS
+                # 3. ESTADÍSTICAS (HH:MM:SS como texto)
                 ws.append([])
                 ws.merge_cells('A11:B11')
                 ws['A11'] = "ESTADÍSTICAS DE ASISTENCIA"
@@ -3494,10 +4410,10 @@ class VentanaPrincipal:
                 ws['B11'].border = border
 
                 estadisticas_data = [
-                    ["Promedio semanal (hrs):", float(estadisticas.get('promedio_semanal', 0))],
-                    ["Promedio mensual (hrs):", float(estadisticas.get('promedio_mensual', 0))],
-                    ["Hora más frecuente de entrada:", estadisticas.get('hora_entrada_frecuente', '--:--')],
-                    ["Hora más frecuente de salida:", estadisticas.get('hora_salida_frecuente', '--:--')]
+                    ["Promedio semanal (hrs):",   estadisticas.get('promedio_semanal', "00:00:00")],
+                    ["Promedio mensual (hrs):",   estadisticas.get('promedio_mensual', "00:00:00")],
+                    ["Hora más frecuente de entrada:", estadisticas.get('hora_entrada_frecuente', '--:--:--')],
+                    ["Hora más frecuente de salida:",  estadisticas.get('hora_salida_frecuente', '--:--:--')]
                 ]
 
                 start_row = ws.max_row + 1
@@ -3510,24 +4426,27 @@ class VentanaPrincipal:
                     ws[f'B{row_idx}'].border = border
                     ws[f'A{row_idx}'].alignment = alignment
                     ws[f'B{row_idx}'].alignment = alignment
-                    if isinstance(row_data[1], (int, float)):
-                        ws[f'B{row_idx}'].number_format = '0.00'
+                    # ya no se usa number_format, son strings HH:MM:SS
 
-                # 4. HISTORIAL
+                # 4. HISTORIAL (CON INCIDENCIAS)
                 ws.append([])
                 titulo_historial_row = ws.max_row + 1
-                ws.merge_cells(start_row=titulo_historial_row, start_column=1,
-                               end_row=titulo_historial_row, end_column=4)
+                ws.merge_cells(
+                    start_row=titulo_historial_row,
+                    start_column=1,
+                    end_row=titulo_historial_row,
+                    end_column=5
+                )
                 cell_titulo = ws.cell(row=titulo_historial_row, column=1)
                 cell_titulo.value = "HISTORIAL DETALLADO DE ASISTENCIA"
                 cell_titulo.font = header_font
                 cell_titulo.fill = header_fill
                 cell_titulo.alignment = Alignment(horizontal="center")
 
-                for col in range(1, 4 + 1):
+                for col in range(1, 6):
                     ws.cell(row=titulo_historial_row, column=col).border = border
 
-                encabezados = ["Fecha", "Hora de Entrada", "Hora de Salida", "Horas Presentes"]
+                encabezados = ["Fecha", "Hora de Entrada", "Hora de Salida", "Horas Presentes", "Incidencia"]
                 header_row = ws.max_row + 1
                 ws.append(encabezados)
                 for col, header in enumerate(encabezados, start=1):
@@ -3543,21 +4462,47 @@ class VentanaPrincipal:
                     for reg in historial:
                         row = [
                             reg.get('fecha', '--/--/----'),
-                            reg.get('hora_entrada', '--:--'),
-                            reg.get('hora_salida', '--:--'),
-                            float(reg.get('horas_presentes', 0))
+                            reg.get('hora_entrada', '--:--:--'),
+                            reg.get('hora_salida', '--:--:--'),
+                            reg.get('horas_presentes', '00:00:00'),   # HH:MM:SS
+                            reg.get('motivo_incidencia', "")          # motivo de incidencia
                         ]
                         ws.append(row)
                 else:
-                    ws.append(["--/--/----", "--:--", "--:--", 0.0])
+                    ws.append(["--/--/----", "--:--:--", "--:--:--", "00:00:00", ""])
 
-                for row in range(header_row, ws.max_row + 1):
-                    for col in range(1, 5):
-                        cell = ws.cell(row=row, column=col)
+                # Formato filas + resaltar solo la celda de hora de salida cuando hay incidencia
+                for row_idx in range(header_row + 1, ws.max_row + 1):
+                    for col_idx in range(1, 6):
+                        cell = ws.cell(row=row_idx, column=col_idx)
                         cell.border = border
                         cell.alignment = alignment
-                        if col == 4 and isinstance(cell.value, (int, float)):
-                            cell.number_format = '0.00'
+
+                    # Columna 5 = Incidencia → si tiene texto, pintamos SOLO la celda de Hora de salida (col 3)
+                    cell_inc = ws.cell(row=row_idx, column=5)
+                    if isinstance(cell_inc.value, str) and cell_inc.value.strip():
+                        cell_salida = ws.cell(row=row_idx, column=3)  # Hora de salida
+                        cell_salida.fill = PatternFill(
+                            start_color="FFF59D",  # amarillo suave
+                            end_color="FFF59D",
+                            fill_type="solid"
+                        )
+
+                # 5. LEYENDA MOTIVOS
+                leyenda_row = ws.max_row + 2
+                ws.merge_cells(
+                    start_row=leyenda_row,
+                    start_column=1,
+                    end_row=leyenda_row,
+                    end_column=5
+                )
+                cell_leyenda = ws.cell(row=leyenda_row, column=1)
+                cell_leyenda.value = (
+                    "Motivo de incidencias (solo cuando aplique): "
+                    "Vista de campo (obra), Coordinación cerrada, Clases en línea."
+                )
+                cell_leyenda.font = Font(italic=True, size=10)
+                cell_leyenda.alignment = Alignment(horizontal="left")
 
                 # Ajuste de columnas
                 for col in ws.columns:
@@ -3574,9 +4519,6 @@ class VentanaPrincipal:
                 ws.freeze_panes = 'A2'
 
                 # PROTECCIÓN
-                from openpyxl.styles import Protection
-                from openpyxl.workbook.protection import WorkbookProtection
-
                 for row in ws.iter_rows():
                     for cell in row:
                         cell.protection = Protection(locked=True)

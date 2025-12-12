@@ -233,6 +233,24 @@ class Controlador:
     def obtener_estudiantes_por_generacion(self, nombre_generacion):
         """Obtiene estudiantes filtrados por el nombre de la generación (ej: 'GTU2025')"""
         return self.modelo.obtener_estudiantes_por_generacion(nombre_generacion)
+    
     def buscar_estudiantes(self, q, limit=20):
         return self.modelo.buscar_estudiantes(q, limit)
+
+    def guardar_huella_admin(self, template: bytes) -> bool:
+        return self.modelo.guardar_huella_admin(template)
+
+    def obtener_huella_admin(self):
+        return self.modelo.obtener_huella_admin()
+    
+   # ===========================
+   # insidencias
+   # ===========================
+    def obtener_asistencias_sin_salida_por_alumno(self, alumno_id):
+        return self.modelo.obtener_asistencias_sin_salida_por_alumno(alumno_id)
+
+    def registrar_salida_manual_con_incidencia(self, asistencia_id, hora_salida, motivo_incidencia):
+        return self.modelo.registrar_salida_manual_con_incidencia(
+            asistencia_id, hora_salida, motivo_incidencia
+        )
 

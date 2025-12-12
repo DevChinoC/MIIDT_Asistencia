@@ -1,7 +1,9 @@
 from datetime import datetime
 from sqlite3 import IntegrityError
 from typing import List, Dict, Optional, Union
-from datetime import datetime, timedelta   # arriba del archivo, si aún no lo tienes
+from datetime import datetime, timedelta  
+
+
 class Modelo:
     def __init__(self, db):
         self.db = db
@@ -27,8 +29,19 @@ class Modelo:
         huella_digital, generacion, area_conocimiento, carrera,
         asesor, id_asesor,
     ):
-        """Registra un nuevo alumno. Evita duplicados por matrícula, conserva ceros a la izquierda
-        y resuelve catálogos a *_id (generacion_id, area_id, carrera_id)."""
+        """
+        Registra un nuevo alumno. Evita duplicados por matrícula, email y huella,
+        conserva ceros a la izquierda en matrícula y resuelve catálogos a *_id 
+        (generacion_id, area_id, carrera_id).
+
+        Returns:
+            True                   -> registro exitoso
+            "duplicado_matricula"  -> la matrícula ya existe
+            "duplicado_email"      -> el email ya existe
+            "duplicado_huella"     -> la huella ya está registrada
+            "duplicado"            -> otro error de integridad (FK, etc.)
+            False                  -> error general
+        """
         try:
             fecha_registro = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -39,15 +52,26 @@ class Modelo:
             )
             if self.cursor.fetchone():
                 print(f"⚠️ Matrícula duplicada detectada: {matricula}")
-                return "duplicado"
-            
+                return "duplicado_matricula"
+
+            # --- validar duplicado por email ---
             self.cursor.execute(
                 "SELECT 1 FROM alumnos WHERE email = %s LIMIT 1",
                 (str(email).strip(),)
             )
             if self.cursor.fetchone():
-                print(f"⚠️ Gmail duplicada detectada: {email}")
+                print(f"⚠️ Email duplicado detectado: {email}")
                 return "duplicado_email"
+
+            # --- validar duplicado por huella (si viene informada) ---
+            if huella_digital:
+                self.cursor.execute(
+                    "SELECT 1 FROM alumnos WHERE huella_digital = %s LIMIT 1",
+                    (huella_digital,)
+                )
+                if self.cursor.fetchone():
+                    print("⚠️ Huella duplicada detectada")
+                    return "duplicado_huella"
 
             # --- resolver IDs de catálogos (crea si no existen) ---
             gen_id  = self._id_por_nombre("generaciones", generacion)
@@ -64,7 +88,7 @@ class Modelo:
                     generacion_id, area_id, carrera_id,       -- nuevos FK IDs
                     asesor, asesor_id, 
                     created_at
-                ) VALUES (%s, %s, %s, %s, %s, %s,  %s, %s, %s,  %s, %s, %s,  %s, %s, %s,)
+                ) VALUES (%s, %s, %s, %s, %s, %s,  %s, %s, %s,  %s, %s, %s,  %s, %s, %s)
                 """,
                 (
                     email,
@@ -82,12 +106,21 @@ class Modelo:
             self.db.commit()
             return True
 
-            # Manejo de duplicados por UNIQUE (matricula/email) o FK
         except IntegrityError as e:
             print(f"Error de integridad (posible duplicado o FK): {e}")
             self.db.rollback()
-            # Si quieres distinguir por código 1062, puedes parsear e.args
+
+            # Intentamos identificar qué campo causó el duplicado
+            msg = str(e).lower()
+            if "matricula" in msg:
+                return "duplicado_matricula"
+            if "email" in msg:
+                return "duplicado_email"
+            if "huella" in msg or "huella_digital" in msg:
+                return "duplicado_huella"
+
             return "duplicado"
+
         except Exception as e:
             print(f"Error general al registrar estudiante: {e}")
             self.db.rollback()
@@ -467,27 +500,45 @@ class Modelo:
     def obtener_estadisticas_estudiante(self, estudiante_id, mes=None, anio=None, fecha_inicio=None, fecha_fin=None):
         """
         Obtiene las estadísticas de un estudiante.
+
+        - TODAS las horas se formatean como HH:MM:SS.
         - Las horas diarias se TOPAN a 8.00 para efectos de reporte.
+        - Devuelve historial con motivo_incidencia y fecha_modificacion.
         """
         try:
+            from datetime import datetime
+
+            def horas_a_hms(horas_float: float) -> str:
+                """Convierte horas decimales a 'HH:MM:SS'."""
+                try:
+                    total_seg = int(round(float(horas_float) * 3600))
+                except (ValueError, TypeError):
+                    total_seg = 0
+                h = total_seg // 3600
+                m = (total_seg % 3600) // 60
+                s = total_seg % 60
+                return f"{h:02d}:{m:02d}:{s:02d}"
+
             # Consulta base
             query = """
                 SELECT 
-                    asistencia as fecha,
+                    asistencia AS fecha,
                     CASE 
                         WHEN hora_entrada IS NOT NULL THEN hora_entrada
                         ELSE NULL
-                    END as hora_entrada,
+                    END AS hora_entrada,
                     CASE 
                         WHEN hora_salida IS NOT NULL THEN hora_salida
                         ELSE NULL
-                    END as hora_salida,
+                    END AS hora_salida,
                     CASE
                         WHEN hora_entrada IS NOT NULL AND hora_salida IS NOT NULL
                         THEN TIME_TO_SEC(TIMEDIFF(hora_salida, hora_entrada)) / 3600.0
                         ELSE 0
-                    END AS horas_presentes
-                FROM registro_asistencias 
+                    END AS horas_presentes,
+                    motivo_incidencia,
+                    fecha_modificacion
+                FROM registro_asistencias
                 WHERE alumno_id = %s
             """
 
@@ -508,106 +559,120 @@ class Modelo:
 
             query += " ORDER BY fecha DESC"
 
-            print(f"Ejecutando consulta SQL con parámetros: {params}")
             self.cursor.execute(query, params)
             historial = self.cursor.fetchall()
-            print(f"Historial obtenido ({type(historial)}): {historial}")
 
             historial_dicts = []
             horas_entrada = []
             horas_salida = []
             horas_semanales = {}
             horas_mensuales = {}
-            total_horas_periodo = 0.0   # suma total de horas (ya topadas a 8)
-
-            from datetime import datetime
+            total_horas_periodo = 0.0   # suma en horas (ya topadas)
 
             for reg in historial:
                 try:
-                    # Valores crudos
-                    fecha_raw = reg[0]
-                    hora_ent_raw = reg[1]
-                    hora_sal_raw = reg[2]
-                    horas_raw = reg[3]
+                    fecha_raw         = reg[0]
+                    hora_ent_raw      = reg[1]
+                    hora_sal_raw      = reg[2]
+                    horas_raw         = reg[3]
+                    motivo_raw        = reg[4]
+                    fecha_mod_raw     = reg[5]
 
-                    # Formateo básico
+                    # ----- Fecha -----
                     fecha = '--/--/----'
-                    hora_entrada = '--:--'
-                    hora_salida = '--:--'
-
                     if fecha_raw:
                         if hasattr(fecha_raw, 'strftime'):
                             fecha = fecha_raw.strftime('%d/%m/%Y')
                         else:
                             fecha = str(fecha_raw)
 
+                    # ----- Hora entrada HH:MM:SS -----
+                    hora_entrada = '--:--:--'
                     if hora_ent_raw:
                         if hasattr(hora_ent_raw, 'strftime'):
-                            hora_entrada = hora_ent_raw.strftime('%H:%M')
+                            hora_entrada = hora_ent_raw.strftime('%H:%M:%S')
                         else:
-                            hora_entrada = str(hora_ent_raw)
+                            try:
+                                dt = datetime.strptime(str(hora_ent_raw), '%H:%M:%S')
+                                hora_entrada = dt.strftime('%H:%M:%S')
+                            except Exception:
+                                hora_entrada = str(hora_ent_raw)
 
+                    # ----- Hora salida HH:MM:SS -----
+                    hora_salida = '--:--:--'
                     if hora_sal_raw:
                         if hasattr(hora_sal_raw, 'strftime'):
-                            hora_salida = hora_sal_raw.strftime('%H:%M')
+                            hora_salida = hora_sal_raw.strftime('%H:%M:%S')
                         else:
-                            hora_salida = str(hora_sal_raw)
+                            try:
+                                dt = datetime.strptime(str(hora_sal_raw), '%H:%M:%S')
+                                hora_salida = dt.strftime('%H:%M:%S')
+                            except Exception:
+                                hora_salida = str(hora_sal_raw)
 
                     # ====== TOPAR HORAS DIARIAS A 8.00 ======
-                    horas_presentes = '0.00'
                     horas_val = 0.0
                     if horas_raw is not None:
                         try:
                             horas_val = float(horas_raw)
                         except (ValueError, TypeError):
                             horas_val = 0.0
-
-                        # 🔴 AQUI SE LIMITA: máximo 8 horas por día
                         if horas_val > 8.0:
                             horas_val = 8.0
 
-                        horas_presentes = f"{horas_val:.2f}"
+                    horas_presentes_str = horas_a_hms(horas_val)
+
+                    # Motivo / fecha modificación
+                    motivo_txt = str(motivo_raw).strip() if motivo_raw else ""
+                    fecha_mod_txt = ""
+                    if fecha_mod_raw:
+                        try:
+                            if hasattr(fecha_mod_raw, "strftime"):
+                                fecha_mod_txt = fecha_mod_raw.strftime("%d/%m/%Y %H:%M:%S")
+                            else:
+                                fecha_mod_txt = str(fecha_mod_raw)
+                        except Exception:
+                            fecha_mod_txt = str(fecha_mod_raw)
 
                     # Registro para historial
                     historial_dicts.append({
-                        'fecha': fecha,
-                        'hora_entrada': hora_entrada,
-                        'hora_salida': hora_salida,
-                        'horas_presentes': horas_presentes
+                        "fecha": fecha,
+                        "hora_entrada": hora_entrada,
+                        "hora_salida": hora_salida,
+                        "horas_presentes": horas_presentes_str,   # HH:MM:SS
+                        "motivo_incidencia": motivo_txt,
+                        "fecha_modificacion": fecha_mod_txt,
                     })
 
-                    # Acumular totales
+                    # Acumular totales en horas
                     total_horas_periodo += horas_val
 
-                    # Recolectar para horas frecuentes
-                    if hora_entrada != '--:--':
+                    # Horas frecuentes
+                    if hora_entrada != '--:--:--':
                         horas_entrada.append(hora_entrada)
-                    if hora_salida != '--:--':
+                    if hora_salida != '--:--:--':
                         horas_salida.append(hora_salida)
 
-                    # Calcular semana y mes para promedios, usando la fecha real
+                    # Semanas / meses para promedios
                     if fecha_raw:
                         try:
-                            # fecha_raw suele venir como date/datetime
                             if isinstance(fecha_raw, str):
-                                # Por si acaso viene como cadena
                                 try:
                                     fecha_dt = datetime.strptime(fecha_raw, '%Y-%m-%d')
                                 except ValueError:
                                     fecha_dt = datetime.strptime(fecha_raw, '%Y-%m-%d %H:%M:%S')
                             else:
-                                # date/datetime
                                 if hasattr(fecha_raw, 'date'):
-                                    fecha_dt = datetime.combine(fecha_raw, datetime.min.time()) \
-                                        if not hasattr(fecha_raw, 'hour') else fecha_raw
+                                    if not hasattr(fecha_raw, 'hour'):
+                                        fecha_dt = datetime.combine(fecha_raw, datetime.min.time())
+                                    else:
+                                        fecha_dt = fecha_raw
                                 else:
-                                    # fallback
                                     fecha_dt = datetime.strptime(str(fecha_raw), '%Y-%m-%d')
 
                             semana = f"{fecha_dt.year}-W{fecha_dt.isocalendar()[1]}"
                             mes_clave = f"{fecha_dt.year}-{fecha_dt.month:02d}"
 
-                            # usar horas topadas
                             horas_semanales[semana] = horas_semanales.get(semana, 0.0) + horas_val
                             horas_mensuales[mes_clave] = horas_mensuales.get(mes_clave, 0.0) + horas_val
 
@@ -621,30 +686,35 @@ class Modelo:
                     traceback.print_exc()
                     continue
 
-            # Calcular promedios (con horas ya topadas)
-            promedio_semanal = sum(horas_semanales.values()) / len(horas_semanales) if horas_semanales else 0.0
-            promedio_mensual = sum(horas_mensuales.values()) / len(horas_mensuales) if horas_mensuales else 0.0
+            # Promedios (en horas decimales primero)
+            promedio_semanal_h = sum(horas_semanales.values()) / len(horas_semanales) if horas_semanales else 0.0
+            promedio_mensual_h = sum(horas_mensuales.values()) / len(horas_mensuales) if horas_mensuales else 0.0
 
-            # Hora más frecuente
+            # Convertir totales y promedios a HH:MM:SS
+            total_horas_str   = horas_a_hms(total_horas_periodo)
+            prom_semanal_str  = horas_a_hms(promedio_semanal_h)
+            prom_mensual_str  = horas_a_hms(promedio_mensual_h)
+
+            # Hora más frecuente de entrada/salida
             def hora_mas_frecuente(lista_horas):
                 if not lista_horas:
-                    return '--:--'
+                    return '--:--:--'
                 conteo = {}
                 for h in lista_horas:
                     conteo[h] = conteo.get(h, 0) + 1
                 return max(conteo.items(), key=lambda x: x[1])[0]
 
             hora_entrada_frec = hora_mas_frecuente(horas_entrada)
-            hora_salida_frec = hora_mas_frecuente(horas_salida)
+            hora_salida_frec  = hora_mas_frecuente(horas_salida)
 
             return {
-                'promedio_semanal': f"{promedio_semanal:.2f}",
-                'promedio_mensual': f"{promedio_mensual:.2f}",
-                'total_horas_periodo': f"{total_horas_periodo:.2f}",
-                'total_horas_mes': f"{total_horas_periodo:.2f}",  # por compatibilidad con tus PDFs
-                'hora_entrada_frecuente': hora_entrada_frec,
-                'hora_salida_frecuente': hora_salida_frec,
-                'historial': historial_dicts
+                "promedio_semanal": prom_semanal_str,     # HH:MM:SS
+                "promedio_mensual": prom_mensual_str,     # HH:MM:SS
+                "total_horas_periodo": total_horas_str,   # HH:MM:SS
+                "total_horas_mes": total_horas_str,       # compatibilidad
+                "hora_entrada_frecuente": hora_entrada_frec,
+                "hora_salida_frecuente": hora_salida_frec,
+                "historial": historial_dicts,
             }
 
         except Exception as e:
@@ -652,15 +722,14 @@ class Modelo:
             import traceback
             traceback.print_exc()
             return {
-                'promedio_semanal': '0.00',
-                'promedio_mensual': '0.00',
-                'total_horas_periodo': '0.00',
-                'total_horas_mes': '0.00',
-                'hora_entrada_frecuente': '--:--',
-                'hora_salida_frecuente': '--:--',
-                'historial': []
+                "promedio_semanal": "00:00:00",
+                "promedio_mensual": "00:00:00",
+                "total_horas_periodo": "00:00:00",
+                "total_horas_mes": "00:00:00",
+                "hora_entrada_frecuente": "--:--:--",
+                "hora_salida_frecuente": "--:--:--",
+                "historial": [],
             }
-
 
 
     # ===== CATALOGO: GENERACIONES =====
@@ -918,5 +987,133 @@ class Modelo:
             print(f"Error al buscar estudiantes: {e}")
             return []
 
+    # ========================
+    # HUELLA DEL ADMINISTRADOR
+    # ========================
 
- 
+    def guardar_huella_admin(self, template: bytes) -> bool:
+        """
+        Guarda (o reemplaza) la huella del administrador en admin_config.
+        Siempre deja una sola fila.
+        """
+        try:
+            ahora = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
+
+            # Borramos cualquier huella anterior para dejar solo una
+            self.cursor.execute("DELETE FROM admin_config")
+
+            self.cursor.execute(
+                """
+                INSERT INTO admin_config (huella_admin, created_at, updated_at)
+                VALUES (%s, %s, %s)
+                """,
+                (template, ahora, ahora)
+            )
+            self.db.commit()
+            return True
+        except Exception as e:
+            print(f"Error al guardar huella admin: {e}")
+            self.db.rollback()
+            return False
+
+    def obtener_huella_admin(self) -> Optional[bytes]:
+        """
+        Devuelve la huella del administrador (bytes) o None si no hay.
+        """
+        try:
+            self.cursor.execute(
+                "SELECT huella_admin FROM admin_config ORDER BY id DESC LIMIT 1"
+            )
+            row = self.cursor.fetchone()
+            return row[0] if row else None
+        except Exception as e:
+            print(f"Error al obtener huella admin: {e}")
+            return None
+
+   # ===========================
+   # insidencias
+   # ===========================
+   
+    
+
+    def obtener_asistencias_sin_salida_por_alumno(self, alumno_id):
+        from datetime import date
+        """
+        Devuelve las asistencias de un alumno que tienen entrada pero NO salida
+        SOLO del mes actual.
+
+        Se considera "sin salida" cuando:
+        - hora_salida IS NULL
+        - o hora_salida = ''
+        - o hora_salida = '00:00:00'
+
+        El rango de fechas es:
+        [primer_dia_mes_actual, primer_dia_mes_siguiente)
+        Es decir, hasta el último día del mes actual inclusive.
+        """
+        try:
+            hoy = date.today()
+            # Primer día del mes actual
+            primer_dia = hoy.replace(day=1)
+
+            # Primer día del mes siguiente
+            if hoy.month == 12:
+                primer_dia_siguiente = date(hoy.year + 1, 1, 1)
+            else:
+                primer_dia_siguiente = date(hoy.year, hoy.month + 1, 1)
+
+            self.cursor.execute(
+                """
+                SELECT
+                    id,
+                    alumno_id,
+                    asistencia AS fecha,      -- 👈 AQUÍ usamos 'asistencia' y la alias 'fecha'
+                    hora_entrada,
+                    hora_salida,
+                    motivo_incidencia
+                FROM registro_asistencias
+                WHERE alumno_id = %s
+                AND asistencia >= %s
+                AND asistencia < %s
+                AND hora_entrada IS NOT NULL
+                AND (
+                        hora_salida IS NULL
+                    OR hora_salida = ''
+                    OR hora_salida = '00:00:00'
+                )
+                ORDER BY asistencia DESC, hora_entrada
+                """,
+                (alumno_id, primer_dia, primer_dia_siguiente)
+            )
+            cols = [c[0] for c in self.cursor.description]
+            return [dict(zip(cols, row)) for row in self.cursor.fetchall()]
+
+        except Exception as e:
+            print(f"Error al obtener asistencias sin salida: {e}")
+            return []
+
+    def registrar_salida_manual_con_incidencia(self, asistencia_id, hora_salida, motivo_incidencia) -> bool:
+        """
+        Actualiza un registro en registro_asistencias para:
+        - fijar hora_salida,
+        - guardar motivo_incidencia,
+        - y registrar fecha_modificacion.
+        """
+        try:
+            fecha_mod = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
+            self.cursor.execute(
+                """
+                UPDATE registro_asistencias
+                SET hora_salida = %s,
+                    motivo_incidencia = %s,
+                    fecha_modificacion = %s
+                WHERE id = %s
+                """,
+                (hora_salida, motivo_incidencia, fecha_mod, asistencia_id)
+            )
+            self.db.commit()
+            return True
+        except Exception as e:
+            print(f"Error al registrar salida manual con incidencia: {e}")
+            self.db.rollback()
+            return False
