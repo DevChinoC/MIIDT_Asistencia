@@ -1,7 +1,7 @@
 from datetime import datetime
 from sqlite3 import IntegrityError
 from typing import List, Dict, Optional, Union
-
+from datetime import datetime, timedelta   # arriba del archivo, si aún no lo tienes
 class Modelo:
     def __init__(self, db):
         self.db = db
@@ -259,6 +259,41 @@ class Modelo:
             print(f"Error al registrar asistencia: {e}")
             self.db.rollback()
             return False
+    
+    
+
+    def obtener_ultima_asistencia_hoy(self, estudiante_id):
+        """
+        Devuelve el último registro de asistencia de HOY para un estudiante.
+        - Si no hay registros hoy -> None
+        - Si hay, regresa dict con id, asistencia, hora_entrada, hora_salida
+        """
+        try:
+            hoy = datetime.now().strftime("%Y-%m-%d")
+
+            self.cursor.execute("""
+                SELECT id, asistencia, hora_entrada, hora_salida
+                FROM registro_asistencias
+                WHERE alumno_id = %s
+                  AND DATE(asistencia) = %s
+                ORDER BY asistencia DESC, id DESC
+                LIMIT 1
+            """, (estudiante_id, hoy))
+
+            row = self.cursor.fetchone()
+            if not row:
+                return None
+
+            return {
+                "id": row[0],
+                "asistencia": row[1],
+                "hora_entrada": row[2],
+                "hora_salida": row[3],
+            }
+        except Exception as e:
+            print(f"Error al obtener última asistencia de hoy: {e}")
+            return None
+
 
     def obtener_asistencias_hoy(self):
         try:
@@ -278,6 +313,63 @@ class Modelo:
             return asistencias
         except Exception as e:
             print(f"Error al obtener asistencias: {e}")
+            return []
+
+    def obtener_asistencias_hoy_completo(self):
+        """
+        Obtiene las asistencias de hoy con formato de diccionario para reportes.
+        Devuelve: [{nombre, fecha, hora_entrada, hora_salida, horas_presentes}, ...]
+        """
+        try:
+            hoy = datetime.now().astimezone().strftime("%Y-%m-%d")
+            
+            self.cursor.execute("""
+                SELECT 
+                    a.nombre, a.apellido_paterno, a.apellido_materno,
+                    r.asistencia, r.hora_entrada, r.hora_salida,
+                    CASE
+                        WHEN r.hora_entrada IS NOT NULL AND r.hora_salida IS NOT NULL
+                        THEN TIME_TO_SEC(TIMEDIFF(r.hora_salida, r.hora_entrada)) / 3600.0
+                        ELSE 0
+                    END AS horas_presentes
+                FROM registro_asistencias r
+                JOIN alumnos a ON r.alumno_id = a.id
+                WHERE r.asistencia = %s
+                ORDER BY a.apellido_paterno, a.apellido_materno, a.nombre
+            """, (hoy,))
+            
+            rows = self.cursor.fetchall()
+            resultado = []
+            
+            for row in rows:
+                nombre_completo = f"{row[0]} {row[1]} {row[2]}".strip()
+                fecha = row[3]
+                hora_entrada = row[4]
+                hora_salida = row[5]
+                horas_val = float(row[6]) if row[6] else 0.0
+                
+                # Formateo
+                fecha_str = str(fecha)
+                hora_ent_str = str(hora_entrada) if hora_entrada else "--:--"
+                hora_sal_str = str(hora_salida) if hora_salida else "--:--"
+                
+                # Topar a 8 horas (regla de negocio vista en obtener_estadisticas_estudiante)
+                if horas_val > 8.0:
+                    horas_val = 8.0
+                
+                resultado.append({
+                    "nombre": nombre_completo,
+                    "fecha": fecha_str,
+                    "hora_entrada": hora_ent_str,
+                    "hora_salida": hora_sal_str,
+                    "horas_presentes": f"{horas_val:.2f}"
+                })
+                
+            return resultado
+        except Exception as e:
+            print(f"Error al obtener asistencias completas de hoy: {e}")
+            import traceback
+            traceback.print_exc()
             return []
             
     def registrar_salida(self, registro_id):
@@ -374,18 +466,11 @@ class Modelo:
 
     def obtener_estadisticas_estudiante(self, estudiante_id, mes=None, anio=None, fecha_inicio=None, fecha_fin=None):
         """
-        Obtiene las estadísticas de un estudiante
-        Args:
-            estudiante_id (int): ID del estudiante
-            mes (int, optional): Mes para filtrar (1-12)
-            anio (int, optional): Año para filtrar (ej. 2023)
-            fecha_inicio (str, optional): Fecha de inicio en formato 'YYYY-MM-DD'
-            fecha_fin (str, optional): Fecha de fin en formato 'YYYY-MM-DD'
-        Returns:
-            dict: Diccionario con las estadísticas del estudiante
+        Obtiene las estadísticas de un estudiante.
+        - Las horas diarias se TOPAN a 8.00 para efectos de reporte.
         """
         try:
-            # Construir la consulta base con parámetros opcionales
+            # Consulta base
             query = """
                 SELECT 
                     asistencia as fecha,
@@ -405,145 +490,163 @@ class Modelo:
                 FROM registro_asistencias 
                 WHERE alumno_id = %s
             """
-            
-            # Agregar filtros según los parámetros proporcionados
+
             params = [estudiante_id]
-            
+
             if fecha_inicio and fecha_fin:
-                # Usar rango de fechas
                 query += " AND DATE(asistencia) BETWEEN %s AND %s"
                 params.extend([fecha_inicio, fecha_fin])
             elif mes is not None and anio is not None:
-                # Usar mes y año
                 query += " AND MONTH(asistencia) = %s AND YEAR(asistencia) = %s"
                 params.extend([mes, anio])
             elif mes is not None:
-                # Usar solo mes (año actual)
                 query += " AND MONTH(asistencia) = %s AND YEAR(asistencia) = YEAR(CURDATE())"
                 params.append(mes)
             elif anio is not None:
-                # Usar solo año
                 query += " AND YEAR(asistencia) = %s"
                 params.append(anio)
-                
+
             query += " ORDER BY fecha DESC"
-            
+
             print(f"Ejecutando consulta SQL con parámetros: {params}")
             self.cursor.execute(query, params)
             historial = self.cursor.fetchall()
-            print(f"Historial obtenido{type(historial)}: {historial}")
-            # Convertir a lista de diccionarios
+            print(f"Historial obtenido ({type(historial)}): {historial}")
+
             historial_dicts = []
             horas_entrada = []
             horas_salida = []
             horas_semanales = {}
             horas_mensuales = {}
-            
+            total_horas_periodo = 0.0   # suma total de horas (ya topadas a 8)
+
+            from datetime import datetime
+
             for reg in historial:
                 try:
-                    # Formatear fechas y horas
+                    # Valores crudos
+                    fecha_raw = reg[0]
+                    hora_ent_raw = reg[1]
+                    hora_sal_raw = reg[2]
+                    horas_raw = reg[3]
+
+                    # Formateo básico
                     fecha = '--/--/----'
                     hora_entrada = '--:--'
                     hora_salida = '--:--'
+
+                    if fecha_raw:
+                        if hasattr(fecha_raw, 'strftime'):
+                            fecha = fecha_raw.strftime('%d/%m/%Y')
+                        else:
+                            fecha = str(fecha_raw)
+
+                    if hora_ent_raw:
+                        if hasattr(hora_ent_raw, 'strftime'):
+                            hora_entrada = hora_ent_raw.strftime('%H:%M')
+                        else:
+                            hora_entrada = str(hora_ent_raw)
+
+                    if hora_sal_raw:
+                        if hasattr(hora_sal_raw, 'strftime'):
+                            hora_salida = hora_sal_raw.strftime('%H:%M')
+                        else:
+                            hora_salida = str(hora_sal_raw)
+
+                    # ====== TOPAR HORAS DIARIAS A 8.00 ======
                     horas_presentes = '0.00'
-                    
-                    try:
-                        if reg[0]:  # Fecha
-                            print(f"Fecha obtenida: {reg[0]}")
-                            if hasattr(reg[0], 'strftime'):
-                                fecha = reg[0].strftime('%d/%m/%Y')
-                            else:
-                                fecha = str(reg[0])
-                                
-                        if reg[1]:  # Hora de entrada
-                            print(f"Hora de entrada obtenida: {reg[1]}")
-                            if hasattr(reg[1], 'strftime'):
-                                hora_entrada = reg[1].strftime('%H:%M')
-                            else:
-                                hora_entrada = str(reg[1])
-                                
-                        if reg[2]:  # Hora de salida
-                            print(f"Hora de salida obtenida: {reg[2]}")
-                            if hasattr(reg[2], 'strftime'):
-                                hora_salida = reg[2].strftime('%H:%M')
-                            else:
-                                hora_salida = str(reg[2])
-                                
-                        if reg[3] is not None:  # Horas presentes
-                            print(f"Horas presentes obtenidas: {reg[3]}")
-                            try:
-                                horas_presentes = f"{float(reg[3]):.2f}"
-                            except (ValueError, TypeError):
-                                horas_presentes = '0.00'
-                    except Exception as e:
-                        print(f"Error al formatear fechas/horas: {e}")
-                    
-                    # Agregar al historial
+                    horas_val = 0.0
+                    if horas_raw is not None:
+                        try:
+                            horas_val = float(horas_raw)
+                        except (ValueError, TypeError):
+                            horas_val = 0.0
+
+                        # 🔴 AQUI SE LIMITA: máximo 8 horas por día
+                        if horas_val > 8.0:
+                            horas_val = 8.0
+
+                        horas_presentes = f"{horas_val:.2f}"
+
+                    # Registro para historial
                     historial_dicts.append({
                         'fecha': fecha,
                         'hora_entrada': hora_entrada,
                         'hora_salida': hora_salida,
                         'horas_presentes': horas_presentes
                     })
-                    
-                    # Recolectar horas para cálculos
+
+                    # Acumular totales
+                    total_horas_periodo += horas_val
+
+                    # Recolectar para horas frecuentes
                     if hora_entrada != '--:--':
                         horas_entrada.append(hora_entrada)
                     if hora_salida != '--:--':
                         horas_salida.append(hora_salida)
-                    
-                    print(f"Horas entrada: {horas_entrada}")
-                    print(f"Horas salida-------------------: {horas_salida}")
-                    
-                    # Calcular semana y mes para promedios
-                    if fecha != '--/--/----':
+
+                    # Calcular semana y mes para promedios, usando la fecha real
+                    if fecha_raw:
                         try:
-                            fecha_dt = datetime.strptime(str(reg[0]), '%Y-%m-%d')
-                            semana = f"{fecha_dt.year}-W{fecha_dt.isocalendar()[1]}"
-                            mes = f"{fecha_dt.year}-{fecha_dt.month:02d}"
-                            print(f"Fecha dt: {fecha_dt}")
-                            print(f"Semana: {semana}")
-                            print(f"Mes: {mes}")
-                            # Calcular horas presentes si están disponibles
-                            if reg[3] is not None and reg[3] != '--:--':
+                            # fecha_raw suele venir como date/datetime
+                            if isinstance(fecha_raw, str):
+                                # Por si acaso viene como cadena
                                 try:
-                                    horas = float(reg[3])
-                                    print(f"Horas: {horas}")
-                                    horas_semanales[semana] = horas_semanales.get(semana, 0) + horas
-                                    horas_mensuales[mes] = horas_mensuales.get(mes, 0) + horas
-                                    print(f"Horas semanales: {horas_semanales}")
-                                    print(f"Horas mensuales: {horas_mensuales}")
-                                except (ValueError, TypeError) as ve:
-                                    print(f"Error al convertir horas: {ve}")
-                                    
+                                    fecha_dt = datetime.strptime(fecha_raw, '%Y-%m-%d')
+                                except ValueError:
+                                    fecha_dt = datetime.strptime(fecha_raw, '%Y-%m-%d %H:%M:%S')
+                            else:
+                                # date/datetime
+                                if hasattr(fecha_raw, 'date'):
+                                    fecha_dt = datetime.combine(fecha_raw, datetime.min.time()) \
+                                        if not hasattr(fecha_raw, 'hour') else fecha_raw
+                                else:
+                                    # fallback
+                                    fecha_dt = datetime.strptime(str(fecha_raw), '%Y-%m-%d')
+
+                            semana = f"{fecha_dt.year}-W{fecha_dt.isocalendar()[1]}"
+                            mes_clave = f"{fecha_dt.year}-{fecha_dt.month:02d}"
+
+                            # usar horas topadas
+                            horas_semanales[semana] = horas_semanales.get(semana, 0.0) + horas_val
+                            horas_mensuales[mes_clave] = horas_mensuales.get(mes_clave, 0.0) + horas_val
+
                         except Exception as e:
-                            print(f"Error al procesar fecha {fecha}: {e}")
-                            
+                            print(f"Error al procesar fecha para semana/mes: {e}")
+                            continue
+
                 except Exception as e:
                     print(f"Error al procesar registro: {e}")
+                    import traceback
+                    traceback.print_exc()
                     continue
-            
-            # Calcular promedios
-            promedio_semanal = sum(horas_semanales.values()) / len(horas_semanales) if horas_semanales else 0
-            promedio_mensual = sum(horas_mensuales.values()) / len(horas_mensuales) if horas_mensuales else 0
-            
-            # Encontrar horas más frecuentes
-            def hora_mas_frecuente(horas):
-                if not horas:
+
+            # Calcular promedios (con horas ya topadas)
+            promedio_semanal = sum(horas_semanales.values()) / len(horas_semanales) if horas_semanales else 0.0
+            promedio_mensual = sum(horas_mensuales.values()) / len(horas_mensuales) if horas_mensuales else 0.0
+
+            # Hora más frecuente
+            def hora_mas_frecuente(lista_horas):
+                if not lista_horas:
                     return '--:--'
                 conteo = {}
-                for h in horas:
+                for h in lista_horas:
                     conteo[h] = conteo.get(h, 0) + 1
                 return max(conteo.items(), key=lambda x: x[1])[0]
-            
+
+            hora_entrada_frec = hora_mas_frecuente(horas_entrada)
+            hora_salida_frec = hora_mas_frecuente(horas_salida)
+
             return {
                 'promedio_semanal': f"{promedio_semanal:.2f}",
                 'promedio_mensual': f"{promedio_mensual:.2f}",
-                'hora_entrada_frecuente': hora_mas_frecuente(horas_entrada),
-                'hora_salida_frecuente': hora_mas_frecuente(horas_salida),
+                'total_horas_periodo': f"{total_horas_periodo:.2f}",
+                'total_horas_mes': f"{total_horas_periodo:.2f}",  # por compatibilidad con tus PDFs
+                'hora_entrada_frecuente': hora_entrada_frec,
+                'hora_salida_frecuente': hora_salida_frec,
                 'historial': historial_dicts
             }
-            
+
         except Exception as e:
             print(f"Error al obtener estadísticas del estudiante: {e}")
             import traceback
@@ -551,52 +654,14 @@ class Modelo:
             return {
                 'promedio_semanal': '0.00',
                 'promedio_mensual': '0.00',
+                'total_horas_periodo': '0.00',
+                'total_horas_mes': '0.00',
                 'hora_entrada_frecuente': '--:--',
                 'hora_salida_frecuente': '--:--',
                 'historial': []
             }
 
 
-    def obtener_asistencias_hoy_completo(self):
-        """
-        Obtiene todas las asistencias del día actual con información completa de los estudiantes
-        """
-        try:
-            hoy = datetime.now().strftime("%Y-%m-%d")  # Formato YYYY-MM-DD para la base de datos
-            self.cursor.execute("""
-                SELECT a.nombre, a.apellido_paterno, a.apellido_materno, 
-                       DATE(r.asistencia) as fecha, 
-                       TIME(r.hora_entrada) as hora_entrada, 
-                       TIME(r.hora_salida) as hora_salida,
-                       CASE 
-                            WHEN r.hora_entrada IS NOT NULL AND r.hora_salida IS NOT NULL 
-                            THEN TIMESTAMPDIFF(MINUTE, r.hora_entrada, r.hora_salida) / 60.0
-                            ELSE 0 
-                        END as horas_presentes
-                FROM registro_asistencias r
-                JOIN alumnos a ON r.alumno_id = a.id
-                WHERE DATE(r.asistencia) = %s
-                ORDER BY a.nombre, r.hora_entrada ASC
-            """, (hoy,))  # Nota la coma para hacer una tupla de un solo elemento
-            
-            rows = self.cursor.fetchall()
-            asistencias = []
-            for row in rows:
-                nombre_completo = f"{row[0]} {row[1]} {row[2]}".strip()
-                asistencias.append({
-                    "nombre": nombre_completo,
-                    "fecha": str(row[3]) if row[3] else "",
-                    "hora_entrada": str(row[4]) if row[4] else "",
-                    "hora_salida": str(row[5]) if row[5] else "",
-                    "horas_presentes": f"{float(row[6]):.2f}" if row[6] else ""
-                })
-            return asistencias
-            
-        except Exception as e:
-            print(f"Error al obtener asistencias: {e}")
-            import traceback
-            traceback.print_exc()
-            return []
 
     # ===== CATALOGO: GENERACIONES =====
     def obtener_generaciones(self) -> List[Dict[str, Union[int, str]]]:
@@ -752,11 +817,15 @@ class Modelo:
             return False
  
 
-    def obtener_estudiantes_por_generacion(self, generacion_id: int):
+    def obtener_estudiantes_por_generacion(self, nombre_generacion: str):
         """
-        Devuelve [(id, email, matricula, nombre, ape_p, ape_m, generacion, asesor, area, carrera, asesor_email), ...]
-        filtrando por el ID de generación (alumnos.generacion_id).
-        Toma el correo del asesor directamente desde la tabla teachers.
+        Devuelve [(id, email, matricula, nombre, ape_p, ape_m, generacion,
+                asesor, area, carrera, asesor_email), ...]
+        filtrando por el NOMBRE de la generación (ej. 'GTU2025').
+
+        Soporta:
+        - esquema actual: alumnos.generacion (VARCHAR) - campo directo
+        - esquema futuro: alumnos.generacion_id + tabla generaciones (si se migra)
         """
         try:
             query = """
@@ -767,23 +836,22 @@ class Modelo:
                     a.nombre, 
                     a.apellido_paterno, 
                     a.apellido_materno,
-                    g.nombre AS generacion, 
+                    a.generacion AS generacion, 
                     a.asesor, 
-                    COALESCE(ar.nombre, a.area_conocimiento) AS area_conocimiento,
-                    COALESCE(c.nombre, a.carrera) AS carrera,
+                    a.area_conocimiento AS area_conocimiento,
+                    a.carrera AS carrera,
                     t.email AS asesor_email
                 FROM alumnos a
-                JOIN generaciones g ON g.id = a.generacion_id
                 LEFT JOIN teachers t ON t.id = a.asesor_id
-                LEFT JOIN areas_conocimiento ar ON ar.id = a.area_id
-                LEFT JOIN carreras c ON c.id = a.carrera_id
-                WHERE a.generacion_id = %s
+                WHERE a.generacion = %s
                 ORDER BY a.apellido_paterno, a.apellido_materno, a.nombre;
             """
-            self.cursor.execute(query, (generacion_id,))
+            self.cursor.execute(query, (nombre_generacion,))
             return self.cursor.fetchall()
         except Exception as e:
-            print(f"Error al obtener estudiantes por generación: {e}")
+            print("Error al obtener estudiantes por generación:", e)
+            import traceback
+            traceback.print_exc()
             return []
 
    

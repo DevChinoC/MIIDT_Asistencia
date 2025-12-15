@@ -161,6 +161,7 @@ class Controlador:
     def obtener_asistencias_hoy_completo(self):
         return self.modelo.obtener_asistencias_hoy_completo()
 
+    
     # ===== MÉTODOS PARA GESTIÓN DE CATÁLOGO =====
     
     # Generaciones
@@ -229,8 +230,9 @@ class Controlador:
             nombres = self.modelo.obtener_generaciones_distintas_en_alumnos() or []
         return nombres
 
-    def obtener_estudiantes_por_generacion(self,generacion_id):
-        return self.modelo.obtener_estudiantes_por_generacion(generacion_id)
+    def obtener_estudiantes_por_generacion(self, nombre_generacion):
+        """Obtiene estudiantes filtrados por el nombre de la generación (ej: 'GTU2025')"""
+        return self.modelo.obtener_estudiantes_por_generacion(nombre_generacion)
     def buscar_estudiantes(self, q, limit=20):
         return self.modelo.buscar_estudiantes(q, limit)
 
