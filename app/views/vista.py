@@ -2334,32 +2334,42 @@ class VentanaPrincipal:
                 )
 
         # ====== BOTONES INFERIORES (GUARDAR / SALIR) ======
-        btn_frame = tk.Frame(frame, bg="#f3f4f6")
-        btn_frame.pack(fill="x", pady=(25, 5), anchor="s")
+        
+        btn_row = tk.Frame(frame, bg="#f3f4f6")
+        btn_row.pack(fill="x", pady=(25, 15))
 
+        # Contenedor centrado
+        contenedor_botones = tk.Frame(btn_row, bg="#f3f4f6")
+        contenedor_botones.pack(expand=True)
+
+        # Botón Guardar
         btn_guardar = tk.Button(
-            btn_frame,
+            contenedor_botones,
             text="Guardar",
             bg="#16a34a",
             fg="white",
             font=("Arial", 11, "bold"),
             relief="flat",
+            width=14,
             cursor="hand2",
             command=guardar_salida_manual
         )
-        btn_guardar.pack(side="left", padx=(10, 40), pady=5)
+        btn_guardar.pack(side="left", padx=15)
 
+        # Botón Salir
         btn_cerrar = tk.Button(
-            btn_frame,
+            contenedor_botones,
             text="Salir",
             bg="#e11d48",
             fg="white",
             font=("Arial", 11, "bold"),
             relief="flat",
+            width=14,
             cursor="hand2",
             command=modal.destroy
         )
-        btn_cerrar.pack(side="right", padx=(9, 10), pady=5)
+        btn_cerrar.pack(side="left", padx=15)
+
 
 
     def _registrar_salida(self, registro_id, item_id):
