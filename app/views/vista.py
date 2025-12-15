@@ -2100,9 +2100,6 @@ class VentanaPrincipal:
         2) Muestra sus asistencias con entrada pero sin salida.
         3) Permite registrar salida manual + motivo de incidencia.
         """
-        from tkinter import ttk
-        import datetime
-
         # 1. Verificar huella de la persona
         try:
             personas = self.controlador.obtener_estudiantes_para_asistencia()
@@ -2130,7 +2127,7 @@ class VentanaPrincipal:
             return
 
         # 2. Obtener asistencias sin salida
-        asistencias = self.controlador.obtener_asistencias_sin_salida_por_alumno(alumno_id)
+        asistencias = self.controlador.obtener_asistencias_sin_salida_por_alumno(alumno_id, excluir_hoy=True)
         if not asistencias:
             messagebox.showinfo(
                 "Incidencias",
@@ -2334,32 +2331,42 @@ class VentanaPrincipal:
                 )
 
         # ====== BOTONES INFERIORES (GUARDAR / SALIR) ======
-        btn_frame = tk.Frame(frame, bg="#f3f4f6")
-        btn_frame.pack(fill="x", pady=(25, 5), anchor="s")
+        
+        btn_row = tk.Frame(frame, bg="#f3f4f6")
+        btn_row.pack(fill="x", pady=(25, 15))
 
+        # Contenedor centrado
+        contenedor_botones = tk.Frame(btn_row, bg="#f3f4f6")
+        contenedor_botones.pack(expand=True)
+
+        # Botón Guardar
         btn_guardar = tk.Button(
-            btn_frame,
+            contenedor_botones,
             text="Guardar",
             bg="#16a34a",
             fg="white",
             font=("Arial", 11, "bold"),
             relief="flat",
+            width=14,
             cursor="hand2",
             command=guardar_salida_manual
         )
-        btn_guardar.pack(side="left", padx=(10, 40), pady=5)
+        btn_guardar.pack(side="left", padx=15)
 
+        # Botón Salir
         btn_cerrar = tk.Button(
-            btn_frame,
+            contenedor_botones,
             text="Salir",
             bg="#e11d48",
             fg="white",
             font=("Arial", 11, "bold"),
             relief="flat",
+            width=14,
             cursor="hand2",
             command=modal.destroy
         )
-        btn_cerrar.pack(side="right", padx=(9, 10), pady=5)
+        btn_cerrar.pack(side="left", padx=15)
+
 
 
     def _registrar_salida(self, registro_id, item_id):
@@ -3820,6 +3827,8 @@ class VentanaPrincipal:
         hora_sal = estad.get("hora_salida_frecuente", "--:--")
         historial = estad.get("historial", []) or []
 
+        # ✅ ORDEN DESCENDENTE (más reciente primero)
+        historial_ordenado = sorted(historial, key=lambda r: str(r.get("fecha", "")))
         # ------- datos del alumno -------
         nombre_alumno = (meta.get("nombre", "") or "").strip()
         matricula = str(meta.get("matricula", "") or "")
@@ -3937,7 +3946,7 @@ class VentanaPrincipal:
         pdf.ln(8)
 
         pdf.set_font("Arial", "", 9)
-        for reg in historial:
+        for reg in historial_ordenado:
             if pdf.get_y() + ALTURA_FILA > Y_MAX_TABLA:
                 pdf.add_page()
                 page_w = pdf.w
@@ -3960,21 +3969,25 @@ class VentanaPrincipal:
                 pdf.ln(8)
                 pdf.set_font("Arial", "", 9)
 
-            fecha_txt  = str(reg.get("fecha", ""))
-            ent_txt    = str(reg.get("hora_entrada", ""))
-            sal_txt    = str(reg.get("hora_salida", ""))
-            horas_txt  = str(reg.get("horas_presentes", ""))
-            motivo     = str(reg.get("motivo_incidencia", "") or "")
-            hay_incid  = bool(motivo)
+            fecha_txt = str(reg.get("fecha", ""))
+            ent_txt = str(reg.get("hora_entrada", ""))
+
+            # ✅ Hora salida en blanco si no hay (sin "--:--:--")
+            salida_val = reg.get("hora_salida")
+            sal_txt = "" if salida_val in (None, "", " ", "--:--", "--:--:--") else str(salida_val)
+
+            horas_txt = str(reg.get("horas_presentes", ""))
+            motivo = str(reg.get("motivo_incidencia", "") or "")
+            hay_incid = bool(motivo.strip())
 
             # Fecha
             pdf.cell(col_w[0], ALTURA_FILA, fecha_txt, border=1, align="C")
             # Hora entrada
             pdf.cell(col_w[1], ALTURA_FILA, ent_txt, border=1, align="C")
 
-            # 🟡 Hora salida (solo esta celda se pinta cuando fue manual)
+            # 🟡 Hora salida (solo se pinta cuando fue manual)
             if hay_incid:
-                pdf.set_fill_color(255, 230, 153)  # amarillo claro
+                pdf.set_fill_color(255, 230, 153)
                 pdf.cell(col_w[2], ALTURA_FILA, sal_txt, border=1, align="C", fill=True)
                 pdf.set_fill_color(255, 255, 255)
             else:
@@ -3982,10 +3995,11 @@ class VentanaPrincipal:
 
             # Horas presentes
             pdf.cell(col_w[3], ALTURA_FILA, horas_txt, border=1, align="C")
-            # Incidencia (solo texto, sin color)
+            # Incidencia
             pdf.cell(col_w[4], ALTURA_FILA, motivo, border=1, align="C")
 
             pdf.ln(ALTURA_FILA)
+
         # ------------------------------------------------------------
         # Leyenda de motivos de incidencias
         # ------------------------------------------------------------
@@ -4044,7 +4058,6 @@ class VentanaPrincipal:
         pdf.output(dest_path)
         return dest_path
 
-        
 
     def _enviar_reporte_generacion_por_correo(self, top):
         """

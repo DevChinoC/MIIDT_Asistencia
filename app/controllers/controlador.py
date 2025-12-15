@@ -246,8 +246,8 @@ class Controlador:
    # ===========================
    # insidencias
    # ===========================
-    def obtener_asistencias_sin_salida_por_alumno(self, alumno_id):
-        return self.modelo.obtener_asistencias_sin_salida_por_alumno(alumno_id)
+    def obtener_asistencias_sin_salida_por_alumno(self, alumno_id, excluir_hoy=False):
+        return self.modelo.obtener_asistencias_sin_salida_por_alumno(alumno_id, excluir_hoy=excluir_hoy)
 
     def registrar_salida_manual_con_incidencia(self, asistencia_id, hora_salida, motivo_incidencia):
         return self.modelo.registrar_salida_manual_con_incidencia(
