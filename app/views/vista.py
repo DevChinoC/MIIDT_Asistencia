@@ -3827,6 +3827,8 @@ class VentanaPrincipal:
         hora_sal = estad.get("hora_salida_frecuente", "--:--")
         historial = estad.get("historial", []) or []
 
+        # ✅ ORDEN DESCENDENTE (más reciente primero)
+        historial_ordenado = sorted(historial, key=lambda r: str(r.get("fecha", "")))
         # ------- datos del alumno -------
         nombre_alumno = (meta.get("nombre", "") or "").strip()
         matricula = str(meta.get("matricula", "") or "")
@@ -3944,7 +3946,7 @@ class VentanaPrincipal:
         pdf.ln(8)
 
         pdf.set_font("Arial", "", 9)
-        for reg in historial:
+        for reg in historial_ordenado:
             if pdf.get_y() + ALTURA_FILA > Y_MAX_TABLA:
                 pdf.add_page()
                 page_w = pdf.w
@@ -3967,21 +3969,25 @@ class VentanaPrincipal:
                 pdf.ln(8)
                 pdf.set_font("Arial", "", 9)
 
-            fecha_txt  = str(reg.get("fecha", ""))
-            ent_txt    = str(reg.get("hora_entrada", ""))
-            sal_txt    = str(reg.get("hora_salida", ""))
-            horas_txt  = str(reg.get("horas_presentes", ""))
-            motivo     = str(reg.get("motivo_incidencia", "") or "")
-            hay_incid  = bool(motivo)
+            fecha_txt = str(reg.get("fecha", ""))
+            ent_txt = str(reg.get("hora_entrada", ""))
+
+            # ✅ Hora salida en blanco si no hay (sin "--:--:--")
+            salida_val = reg.get("hora_salida")
+            sal_txt = "" if salida_val in (None, "", " ", "--:--", "--:--:--") else str(salida_val)
+
+            horas_txt = str(reg.get("horas_presentes", ""))
+            motivo = str(reg.get("motivo_incidencia", "") or "")
+            hay_incid = bool(motivo.strip())
 
             # Fecha
             pdf.cell(col_w[0], ALTURA_FILA, fecha_txt, border=1, align="C")
             # Hora entrada
             pdf.cell(col_w[1], ALTURA_FILA, ent_txt, border=1, align="C")
 
-            # 🟡 Hora salida (solo esta celda se pinta cuando fue manual)
+            # 🟡 Hora salida (solo se pinta cuando fue manual)
             if hay_incid:
-                pdf.set_fill_color(255, 230, 153)  # amarillo claro
+                pdf.set_fill_color(255, 230, 153)
                 pdf.cell(col_w[2], ALTURA_FILA, sal_txt, border=1, align="C", fill=True)
                 pdf.set_fill_color(255, 255, 255)
             else:
@@ -3989,10 +3995,11 @@ class VentanaPrincipal:
 
             # Horas presentes
             pdf.cell(col_w[3], ALTURA_FILA, horas_txt, border=1, align="C")
-            # Incidencia (solo texto, sin color)
+            # Incidencia
             pdf.cell(col_w[4], ALTURA_FILA, motivo, border=1, align="C")
 
             pdf.ln(ALTURA_FILA)
+
         # ------------------------------------------------------------
         # Leyenda de motivos de incidencias
         # ------------------------------------------------------------
@@ -4051,7 +4058,6 @@ class VentanaPrincipal:
         pdf.output(dest_path)
         return dest_path
 
-        
 
     def _enviar_reporte_generacion_por_correo(self, top):
         """

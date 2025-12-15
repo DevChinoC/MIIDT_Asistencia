@@ -557,7 +557,7 @@ class Modelo:
                 query += " AND YEAR(asistencia) = %s"
                 params.append(anio)
 
-            query += " ORDER BY fecha DESC"
+            query += " ORDER BY fecha ASC"
 
             self.cursor.execute(query, params)
             historial = self.cursor.fetchall()
