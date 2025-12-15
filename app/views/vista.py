@@ -2100,9 +2100,6 @@ class VentanaPrincipal:
         2) Muestra sus asistencias con entrada pero sin salida.
         3) Permite registrar salida manual + motivo de incidencia.
         """
-        from tkinter import ttk
-        import datetime
-
         # 1. Verificar huella de la persona
         try:
             personas = self.controlador.obtener_estudiantes_para_asistencia()
@@ -2130,7 +2127,7 @@ class VentanaPrincipal:
             return
 
         # 2. Obtener asistencias sin salida
-        asistencias = self.controlador.obtener_asistencias_sin_salida_por_alumno(alumno_id)
+        asistencias = self.controlador.obtener_asistencias_sin_salida_por_alumno(alumno_id, excluir_hoy=True)
         if not asistencias:
             messagebox.showinfo(
                 "Incidencias",

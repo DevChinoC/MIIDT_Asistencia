@@ -1033,64 +1033,49 @@ class Modelo:
    # ===========================
    # insidencias
    # ===========================
-   
-    
-
-    def obtener_asistencias_sin_salida_por_alumno(self, alumno_id):
-        from datetime import date
-        """
-        Devuelve las asistencias de un alumno que tienen entrada pero NO salida
-        SOLO del mes actual.
-
-        Se considera "sin salida" cuando:
-        - hora_salida IS NULL
-        - o hora_salida = ''
-        - o hora_salida = '00:00:00'
-
-        El rango de fechas es:
-        [primer_dia_mes_actual, primer_dia_mes_siguiente)
-        Es decir, hasta el último día del mes actual inclusive.
-        """
+    def obtener_asistencias_sin_salida_por_alumno(self, alumno_id, excluir_hoy=True):
         try:
-            hoy = date.today()
-            # Primer día del mes actual
-            primer_dia = hoy.replace(day=1)
-
-            # Primer día del mes siguiente
-            if hoy.month == 12:
-                primer_dia_siguiente = date(hoy.year + 1, 1, 1)
-            else:
-                primer_dia_siguiente = date(hoy.year, hoy.month + 1, 1)
-
-            self.cursor.execute(
-                """
-                SELECT
+            query = """
+                SELECT 
                     id,
-                    alumno_id,
-                    asistencia AS fecha,      -- 👈 AQUÍ usamos 'asistencia' y la alias 'fecha'
+                    asistencia AS fecha,
                     hora_entrada,
                     hora_salida,
                     motivo_incidencia
                 FROM registro_asistencias
                 WHERE alumno_id = %s
-                AND asistencia >= %s
-                AND asistencia < %s
                 AND hora_entrada IS NOT NULL
-                AND (
-                        hora_salida IS NULL
-                    OR hora_salida = ''
-                    OR hora_salida = '00:00:00'
-                )
-                ORDER BY asistencia DESC, hora_entrada
-                """,
-                (alumno_id, primer_dia, primer_dia_siguiente)
-            )
-            cols = [c[0] for c in self.cursor.description]
-            return [dict(zip(cols, row)) for row in self.cursor.fetchall()]
+                AND (hora_salida IS NULL OR hora_salida = '')
+                AND MONTH(asistencia) = MONTH(CURDATE())
+                AND YEAR(asistencia) = YEAR(CURDATE())
+            """
+            params = [alumno_id]
+
+            # ❌ excluir el día actual
+            if excluir_hoy:
+                query += " AND asistencia < CURDATE() "
+
+            query += " ORDER BY asistencia DESC"
+
+            self.cursor.execute(query, params)
+            rows = self.cursor.fetchall() or []
+
+            asistencias = []
+            for r in rows:
+                asistencias.append({
+                    "id": r[0],
+                    "fecha": str(r[1]),
+                    "hora_entrada": str(r[2]) if r[2] else "",
+                    "hora_salida": str(r[3]) if r[3] else "",
+                    "motivo_incidencia": r[4] if len(r) > 4 else "",
+                })
+
+            return asistencias
 
         except Exception as e:
             print(f"Error al obtener asistencias sin salida: {e}")
             return []
+
 
     def registrar_salida_manual_con_incidencia(self, asistencia_id, hora_salida, motivo_incidencia) -> bool:
         """
