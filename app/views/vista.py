@@ -2013,7 +2013,7 @@ class VentanaPrincipal:
         btn_incidencias = tk.Button(
             panel_lector,
             text="Incidencias",
-            font=("Arial", 11, "bold"),
+            font=("Arial", 12, "bold"),
             bg="#f97316",
             fg="white",
             relief="flat",
@@ -2220,7 +2220,7 @@ class VentanaPrincipal:
         ).grid(row=1, column=0, sticky="w", padx=(0, 5), pady=2)
 
         motivos = [
-            "Vista de campo (obra)",
+            "Visita de campo (obra)",
             "Coordinación cerrada",
             "Clases en línea",
         ]
@@ -2833,7 +2833,8 @@ class VentanaPrincipal:
 
         # Área de mensaje central (se muestra cuando no hay estudiante seleccionado)
         self.frame_mensaje_central = tk.Frame(parent, bg="lightblue")
-        self.frame_mensaje_central.place(relx=0.5, rely=0.5, anchor="center", width=400, height=300)
+        self.frame_mensaje_central.place(relx=0.5, y=350, anchor="n", width=400, height=300)
+
 
         # Cargar y mostrar el ícono
         try:
@@ -4118,7 +4119,7 @@ class VentanaPrincipal:
             0,
             5,
             "Motivo de incidencias (solo cuando aplique): "
-            "Vista de campo (obra), Coordinación cerrada, Clases en línea."
+            "Visita de campo (obra), Coordinación cerrada, Clases en línea."
         )
 
         # Firma
