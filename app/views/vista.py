@@ -3778,6 +3778,7 @@ class VentanaPrincipal:
         - Ordena el historial ASC (01,02,03...)
         - Hora salida en blanco si no existe
         - Si hay incidencia: pinta SOLO la celda de Hora Salida y muestra fecha_modificacion en la columna Incidencia
+        - Rellena días faltantes del mes (28/30/31) y en días sin registro deja todo en blanco
         """
 
         def slugify(s):
@@ -3787,7 +3788,6 @@ class VentanaPrincipal:
             return s.strip().replace(" ", "_")
 
         def _parse_fecha(fecha_str):
-            # Espera "YYYY-MM-DD" o "DD/MM/YYYY"
             if not fecha_str:
                 return datetime.min
             fs = str(fecha_str).strip()
@@ -3800,8 +3800,13 @@ class VentanaPrincipal:
             except:
                 return datetime.min
 
+        def _fmt_fecha_ddmmyyyy(dt: datetime) -> str:
+            try:
+                return dt.strftime("%d/%m/%Y")
+            except:
+                return ""
+
         def _fmt_modificacion(v):
-            # devuelve "dd/mm/yyyy HH:MM:SS" si se puede
             if not v:
                 return ""
             s = str(v).strip()
@@ -3813,7 +3818,6 @@ class VentanaPrincipal:
                     return dt.strftime("%d/%m/%Y %H:%M:%S")
                 except:
                     continue
-            # fallback: si ya viene como datetime
             try:
                 return v.strftime("%d/%m/%Y %H:%M:%S")
             except:
@@ -3855,6 +3859,49 @@ class VentanaPrincipal:
 
         # ✅ ORDEN ASCENDENTE: 01,02,03...
         historial_ordenado = sorted(historial, key=lambda r: _parse_fecha(r.get("fecha", "")))
+
+        # =============================
+        # ✅ RELLENO DE DÍAS DEL MES
+        # =============================
+        if mes and anio:
+            import calendar
+            try:
+                mes_int = int(mes)
+                anio_int = int(anio)
+                _, last_day = calendar.monthrange(anio_int, mes_int)
+
+                # mapa por fecha normalizada a dd/mm/yyyy
+                mapa = {}
+                for r in historial_ordenado:
+                    dt = _parse_fecha(r.get("fecha", ""))
+                    k = _fmt_fecha_ddmmyyyy(dt)
+                    if k:
+                        mapa[k] = r
+
+                historial_completo = []
+                for dia in range(1, last_day + 1):
+                    dt = datetime(anio_int, mes_int, dia)
+                    k = _fmt_fecha_ddmmyyyy(dt)
+
+                    if k in mapa:
+                        # aseguramos que la fecha se vea dd/mm/yyyy
+                        reg = dict(mapa[k])
+                        reg["fecha"] = k
+                        historial_completo.append(reg)
+                    else:
+                        # día sin registro -> todo en blanco
+                        historial_completo.append({
+                            "fecha": k,
+                            "hora_entrada": "",
+                            "hora_salida": "",
+                            "horas_presentes": "",
+                            "motivo_incidencia": "",
+                            "fecha_modificacion": "",
+                        })
+
+                historial_ordenado = historial_completo
+            except:
+                pass
 
         # ------- datos del alumno -------
         nombre_alumno = (meta.get("nombre", "") or "").strip()
@@ -3946,7 +3993,6 @@ class VentanaPrincipal:
 
         # Tabla
         pdf.set_font("Arial", "B", 10)
-
         col_w = [32, 32, 32, 32, 62]
         headers = ["Fecha", "Hora Entrada", "Hora Salida", "Horas Presentes", "Incidencia"]
         ALTURA_FILA = 7
@@ -3957,7 +4003,6 @@ class VentanaPrincipal:
 
         pdf.set_font("Arial", "", 9)
         for reg in historial_ordenado:
-            # --- calcular textos ---
             fecha_txt = str(reg.get("fecha", "") or "")
             ent_txt = str(reg.get("hora_entrada", "") or "")
 
@@ -3972,7 +4017,6 @@ class VentanaPrincipal:
 
             hay_incid = bool(motivo)
 
-            # ✅ incidencia en 2 líneas (motivo arriba, Mod abajo)
             incidencia_txt = ""
             if hay_incid:
                 if mod_fmt:
@@ -3980,7 +4024,6 @@ class VentanaPrincipal:
                 else:
                     incidencia_txt = motivo
 
-            # ✅ altura dinámica (2 líneas si hay incidencia)
             fila_h = ALTURA_FILA * (2 if ("\n" in incidencia_txt) else 1)
 
             if pdf.get_y() + fila_h > Y_MAX_TABLA:
@@ -4005,14 +4048,12 @@ class VentanaPrincipal:
                 pdf.ln(8)
                 pdf.set_font("Arial", "", 9)
 
-            # --- dibujar fila ---
             y0 = pdf.get_y()
             x0 = pdf.get_x()
 
             pdf.cell(col_w[0], fila_h, fecha_txt, border=1, align="C")
             pdf.cell(col_w[1], fila_h, ent_txt, border=1, align="C")
 
-            # 🟡 Solo pinta hora salida cuando fue manual
             if hay_incid and sal_txt:
                 pdf.set_fill_color(255, 230, 153)
                 pdf.cell(col_w[2], fila_h, sal_txt, border=1, align="C", fill=True)
@@ -4022,12 +4063,7 @@ class VentanaPrincipal:
 
             pdf.cell(col_w[3], fila_h, horas_txt, border=1, align="C")
 
-            # ✅ última celda con multi_cell para que "Mod" baje
-            x_incid = pdf.get_x()
-            y_incid = y0
             pdf.multi_cell(col_w[4], ALTURA_FILA, incidencia_txt, border=1, align="L")
-
-            # ✅ volver al final de la fila (porque multi_cell mueve el cursor)
             pdf.set_xy(x0, y0 + fila_h)
 
         pdf.ln(5)
