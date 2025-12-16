@@ -3946,7 +3946,8 @@ class VentanaPrincipal:
 
         # Tabla
         pdf.set_font("Arial", "B", 10)
-        col_w = [35, 35, 35, 35, 50]
+
+        col_w = [32, 32, 32, 32, 62]
         headers = ["Fecha", "Hora Entrada", "Hora Salida", "Horas Presentes", "Incidencia"]
         ALTURA_FILA = 7
 
@@ -3956,7 +3957,33 @@ class VentanaPrincipal:
 
         pdf.set_font("Arial", "", 9)
         for reg in historial_ordenado:
-            if pdf.get_y() + ALTURA_FILA > Y_MAX_TABLA:
+            # --- calcular textos ---
+            fecha_txt = str(reg.get("fecha", "") or "")
+            ent_txt = str(reg.get("hora_entrada", "") or "")
+
+            salida_val = reg.get("hora_salida")
+            sal_txt = "" if salida_val in (None, "", " ", "--:--", "--:--:--") else str(salida_val)
+
+            horas_txt = str(reg.get("horas_presentes", "") or "")
+
+            motivo = str(reg.get("motivo_incidencia", "") or "").strip()
+            mod_raw = reg.get("fecha_modificacion")
+            mod_fmt = _fmt_modificacion(mod_raw)
+
+            hay_incid = bool(motivo)
+
+            # ✅ incidencia en 2 líneas (motivo arriba, Mod abajo)
+            incidencia_txt = ""
+            if hay_incid:
+                if mod_fmt:
+                    incidencia_txt = f"{motivo}\nMod: {mod_fmt}"
+                else:
+                    incidencia_txt = motivo
+
+            # ✅ altura dinámica (2 líneas si hay incidencia)
+            fila_h = ALTURA_FILA * (2 if ("\n" in incidencia_txt) else 1)
+
+            if pdf.get_y() + fila_h > Y_MAX_TABLA:
                 pdf.add_page()
                 page_w = pdf.w
                 page_h = pdf.h
@@ -3978,42 +4005,30 @@ class VentanaPrincipal:
                 pdf.ln(8)
                 pdf.set_font("Arial", "", 9)
 
-            fecha_txt = str(reg.get("fecha", "") or "")
-            ent_txt = str(reg.get("hora_entrada", "") or "")
+            # --- dibujar fila ---
+            y0 = pdf.get_y()
+            x0 = pdf.get_x()
 
-            salida_val = reg.get("hora_salida")
-            sal_txt = "" if salida_val in (None, "", " ", "--:--", "--:--:--") else str(salida_val)
+            pdf.cell(col_w[0], fila_h, fecha_txt, border=1, align="C")
+            pdf.cell(col_w[1], fila_h, ent_txt, border=1, align="C")
 
-            horas_txt = str(reg.get("horas_presentes", "") or "")
-
-            motivo = str(reg.get("motivo_incidencia", "") or "").strip()
-            mod_raw = reg.get("fecha_modificacion")  # ✅ viene del historial
-            mod_fmt = _fmt_modificacion(mod_raw)
-
-            hay_incid = bool(motivo)
-
-            # Incidencia: motivo + fecha_modificacion
-            incidencia_txt = ""
-            if hay_incid:
-                if mod_fmt:
-                    incidencia_txt = f"{motivo} (Mod: {mod_fmt})"
-                else:
-                    incidencia_txt = motivo
-
-            pdf.cell(col_w[0], ALTURA_FILA, fecha_txt, border=1, align="C")
-            pdf.cell(col_w[1], ALTURA_FILA, ent_txt, border=1, align="C")
-
-            # 🟡 Solo pinta la celda de hora salida cuando fue manual (hay_incid)
+            # 🟡 Solo pinta hora salida cuando fue manual
             if hay_incid and sal_txt:
                 pdf.set_fill_color(255, 230, 153)
-                pdf.cell(col_w[2], ALTURA_FILA, sal_txt, border=1, align="C", fill=True)
+                pdf.cell(col_w[2], fila_h, sal_txt, border=1, align="C", fill=True)
                 pdf.set_fill_color(255, 255, 255)
             else:
-                pdf.cell(col_w[2], ALTURA_FILA, sal_txt, border=1, align="C")
+                pdf.cell(col_w[2], fila_h, sal_txt, border=1, align="C")
 
-            pdf.cell(col_w[3], ALTURA_FILA, horas_txt, border=1, align="C")
-            pdf.cell(col_w[4], ALTURA_FILA, incidencia_txt, border=1, align="C")
-            pdf.ln(ALTURA_FILA)
+            pdf.cell(col_w[3], fila_h, horas_txt, border=1, align="C")
+
+            # ✅ última celda con multi_cell para que "Mod" baje
+            x_incid = pdf.get_x()
+            y_incid = y0
+            pdf.multi_cell(col_w[4], ALTURA_FILA, incidencia_txt, border=1, align="L")
+
+            # ✅ volver al final de la fila (porque multi_cell mueve el cursor)
+            pdf.set_xy(x0, y0 + fila_h)
 
         pdf.ln(5)
         pdf.set_font("Arial", "I", 9)
@@ -4064,8 +4079,6 @@ class VentanaPrincipal:
 
         pdf.output(dest_path)
         return dest_path
-
-
 
     def _enviar_reporte_generacion_por_correo(self, top):
         """
