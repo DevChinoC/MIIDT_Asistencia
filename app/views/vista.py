@@ -21,7 +21,7 @@ from openpyxl.utils.dataframe import dataframe_to_rows
 import tempfile, os, shutil,time
 import socket
 import os, unicodedata, re
-from datetime import datetime
+from datetime import datetime,date
 import locale
 import traceback
 from openpyxl.styles import Font, PatternFill, Border, Side, Alignment, Protection
@@ -2013,7 +2013,7 @@ class VentanaPrincipal:
         btn_incidencias = tk.Button(
             panel_lector,
             text="Incidencias",
-            font=("Arial", 11, "bold"),
+            font=("Arial", 12, "bold"),
             bg="#f97316",
             fg="white",
             relief="flat",
@@ -2099,7 +2099,11 @@ class VentanaPrincipal:
         1) Pide huella de la persona.
         2) Muestra sus asistencias con entrada pero sin salida.
         3) Permite registrar salida manual + motivo de incidencia.
+        (Hora salida automática según motivo, NO editable)
         """
+        from tkinter import ttk
+        import datetime
+
         # 1. Verificar huella de la persona
         try:
             personas = self.controlador.obtener_estudiantes_para_asistencia()
@@ -2127,12 +2131,9 @@ class VentanaPrincipal:
             return
 
         # 2. Obtener asistencias sin salida
-        asistencias = self.controlador.obtener_asistencias_sin_salida_por_alumno(alumno_id, excluir_hoy=True)
+        asistencias = self.controlador.obtener_asistencias_sin_salida_por_alumno(alumno_id)
         if not asistencias:
-            messagebox.showinfo(
-                "Incidencias",
-                "Esta persona no tiene asistencias con entrada sin salida registrada."
-            )
+            messagebox.showinfo("Incidencias", "Esta persona no tiene asistencias con entrada sin salida registrada.")
             return
 
         # 3. Crear modal
@@ -2142,7 +2143,6 @@ class VentanaPrincipal:
         modal.transient(self.ventana)
         modal.grab_set()
 
-        # Centrar
         modal.update_idletasks()
         ancho, alto = 650, 400
         x = (modal.winfo_screenwidth() // 2) - (ancho // 2)
@@ -2159,8 +2159,6 @@ class VentanaPrincipal:
             font=("Arial", 12, "bold")
         ).pack(anchor="w", pady=(0, 10))
 
-        # Treeview con asistencias
-        from tkinter import ttk
         cols = ("id", "fecha", "hora_entrada", "hora_salida", "motivo_incidencia")
         tv = ttk.Treeview(frame, columns=cols, show="headings", height=6)
         tv.heading("id", text="ID")
@@ -2174,10 +2172,8 @@ class VentanaPrincipal:
         tv.column("hora_entrada", width=90, anchor="center")
         tv.column("hora_salida", width=90, anchor="center")
         tv.column("motivo_incidencia", width=200, anchor="w")
-
         tv.pack(fill="x", padx=5)
 
-        # Cargar datos
         def cargar_asistencias():
             tv.delete(*tv.get_children())
             for a in asistencias:
@@ -2193,6 +2189,12 @@ class VentanaPrincipal:
                     )
                 )
 
+            # ✅ Asegurar que SIEMPRE haya selección (para que el autocompletado funcione)
+            hijos = tv.get_children()
+            if hijos:
+                tv.selection_set(hijos[0])
+                tv.focus(hijos[0])
+
         cargar_asistencias()
 
         # Área de edición salida + motivo
@@ -2206,7 +2208,7 @@ class VentanaPrincipal:
             font=("Arial", 10)
         ).grid(row=0, column=0, sticky="w", padx=(0, 5), pady=2)
 
-        # Entrada SOLO lectura (se llena automática)
+        # ✅ Solo lectura (se llena automáticamente)
         entry_hora_salida = tk.Entry(edit_frame, width=10, font=("Arial", 10), state="readonly")
         entry_hora_salida.grid(row=0, column=1, sticky="w", pady=2)
 
@@ -2218,128 +2220,116 @@ class VentanaPrincipal:
         ).grid(row=1, column=0, sticky="w", padx=(0, 5), pady=2)
 
         motivos = [
-            "Vista de campo (obra)",
+            "Visita de campo (obra)",
             "Coordinación cerrada",
             "Clases en línea",
         ]
-        combo_motivo = ttk.Combobox(
-            edit_frame,
-            values=motivos,
-            state="readonly",
-            width=30
-        )
+        combo_motivo = ttk.Combobox(edit_frame, values=motivos, state="readonly", width=30)
         combo_motivo.grid(row=1, column=1, sticky="w", pady=2)
 
-        # --- Autocompletar hora de salida al seleccionar un motivo ---
-        def autocompletar_hora_salida(event=None):
+        def _hora_entrada_de_seleccion() -> str:
             sel = tv.selection()
             if not sel:
-                return
+                # fallback: focus
+                focus = tv.focus()
+                if focus:
+                    sel = (focus,)
+            if not sel:
+                return ""
 
-            item = tv.item(sel[0])
-            values = item.get("values", [])
+            values = tv.item(sel[0]).get("values", [])
             if len(values) < 3:
+                return ""
+
+            hora_ent_str = str(values[2]).strip()
+            # Normalizar posibles microsegundos: "10:00:00.000000" -> "10:00:00"
+            if "." in hora_ent_str:
+                hora_ent_str = hora_ent_str.split(".", 1)[0].strip()
+            return hora_ent_str
+
+        # --- Autocompletar hora de salida ---
+        def autocompletar_hora_salida(event=None):
+            motivo = combo_motivo.get().strip()
+            if not motivo:
+                # si no hay motivo, no calculamos nada
                 return
 
-            hora_ent_str = str(values[2]).strip()  # columna "hora_entrada"
+            hora_ent_str = _hora_entrada_de_seleccion()
             if not hora_ent_str:
                 return
 
             try:
-                # Soportar HH:MM o HH:MM:SS
+                # soportar HH:MM o HH:MM:SS
                 if len(hora_ent_str) == 5:
                     dt_ent = datetime.datetime.strptime(hora_ent_str, "%H:%M")
                 else:
                     dt_ent = datetime.datetime.strptime(hora_ent_str, "%H:%M:%S")
 
-                # Sumar 8 horas
+                # salida = entrada + 8 horas
                 dt_sal = dt_ent + datetime.timedelta(hours=8)
 
-                # Límite máximo: 19:00 (7 PM)
+                # límite máximo 19:00 (7 PM)
                 limite = dt_ent.replace(hour=19, minute=0, second=0)
                 if dt_sal > limite:
                     dt_sal = limite
 
                 hora_auto = dt_sal.strftime("%H:%M:%S")
 
-                # Escribir en entry readonly
                 entry_hora_salida.config(state="normal")
                 entry_hora_salida.delete(0, tk.END)
                 entry_hora_salida.insert(0, hora_auto)
                 entry_hora_salida.config(state="readonly")
 
-            except Exception:
-                pass
+            except Exception as e:
+                # ✅ no silenciar: ayuda a detectar formatos raros
+                print(f"[Incidencias] No se pudo calcular salida automática. hora_entrada={hora_ent_str!r}. Error={e}")
 
+        # ✅ calcular cuando elijan motivo
         combo_motivo.bind("<<ComboboxSelected>>", autocompletar_hora_salida)
+        # ✅ y recalcular si cambian de fila (si ya hay motivo elegido)
+        tv.bind("<<TreeviewSelect>>", autocompletar_hora_salida)
 
         def guardar_salida_manual():
             sel = tv.selection()
             if not sel:
-                messagebox.showwarning(
-                    "Selecciona una asistencia",
-                    "Primero selecciona una asistencia de la lista."
-                )
+                messagebox.showwarning("Selecciona una asistencia", "Primero selecciona una asistencia de la lista.")
                 return
 
-            item = tv.item(sel[0])
-            values = item.get("values", [])
+            values = tv.item(sel[0]).get("values", [])
             if not values:
-                messagebox.showerror(
-                    "Error",
-                    "No se pudo obtener la información de la asistencia seleccionada."
-                )
+                messagebox.showerror("Error", "No se pudo obtener la información de la asistencia seleccionada.")
                 return
 
             asistencia_id = values[0]
 
             motivo = combo_motivo.get().strip()
             if not motivo:
-                messagebox.showwarning(
-                    "Motivo de incidencia",
-                    "Debes seleccionar un motivo de incidencia."
-                )
+                messagebox.showwarning("Motivo de incidencia", "Debes seleccionar un motivo de incidencia.")
                 return
 
             hora_salida = entry_hora_salida.get().strip()
             if not hora_salida:
-                messagebox.showwarning(
-                    "Hora de salida",
-                    "Selecciona un motivo para que se calcule la hora de salida automática."
-                )
+                messagebox.showwarning("Hora de salida", "Selecciona un motivo para calcular la salida automática.")
                 return
 
-            ok = self.controlador.registrar_salida_manual_con_incidencia(
-                asistencia_id,
-                hora_salida,
-                motivo
-            )
+            ok = self.controlador.registrar_salida_manual_con_incidencia(asistencia_id, hora_salida, motivo)
             if ok:
-                messagebox.showinfo(
-                    "Salida registrada",
-                    "La salida manual y el motivo de incidencia se han guardado correctamente."
-                )
+                messagebox.showinfo("Salida registrada", "La salida y el motivo de incidencia se guardaron correctamente.")
                 for a in asistencias:
                     if a["id"] == asistencia_id:
                         a["hora_salida"] = hora_salida
                         a["motivo_incidencia"] = motivo
                 cargar_asistencias()
             else:
-                messagebox.showerror(
-                    "Error",
-                    "No se pudo guardar la salida manual con incidencia."
-                )
+                messagebox.showerror("Error", "No se pudo guardar la salida manual con incidencia.")
 
-        # ====== BOTONES INFERIORES (GUARDAR / SALIR) ======
-        
+        # ===== Botones inferiores (Guardar / Salir) =====
         btn_row = tk.Frame(frame, bg="#f3f4f6")
         btn_row.pack(fill="x", pady=(25, 15))
 
-        # Contenedor centrado
         contenedor_botones = tk.Frame(btn_row, bg="#f3f4f6")
         contenedor_botones.pack(expand=True)
 
-        # Botón Guardar
         btn_guardar = tk.Button(
             contenedor_botones,
             text="Guardar",
@@ -2353,7 +2343,6 @@ class VentanaPrincipal:
         )
         btn_guardar.pack(side="left", padx=15)
 
-        # Botón Salir
         btn_cerrar = tk.Button(
             contenedor_botones,
             text="Salir",
@@ -2366,6 +2355,7 @@ class VentanaPrincipal:
             command=modal.destroy
         )
         btn_cerrar.pack(side="left", padx=15)
+
 
 
 
@@ -2843,7 +2833,8 @@ class VentanaPrincipal:
 
         # Área de mensaje central (se muestra cuando no hay estudiante seleccionado)
         self.frame_mensaje_central = tk.Frame(parent, bg="lightblue")
-        self.frame_mensaje_central.place(relx=0.5, rely=0.5, anchor="center", width=400, height=300)
+        self.frame_mensaje_central.place(relx=0.5, y=350, anchor="n", width=400, height=300)
+
 
         # Cargar y mostrar el ícono
         try:
@@ -3438,6 +3429,7 @@ class VentanaPrincipal:
                     messagebox.showwarning("Aviso", "Selecciona un mes válido.")
                     return
                 mes = mes_idx + 1
+                mes_nombre = self.combo_mes.get()
 
                 anio_str = self.combo_anio.get()
                 if not anio_str:
@@ -3484,8 +3476,10 @@ class VentanaPrincipal:
                     elif file_path.lower().endswith(".xlsx"):
                         # ====== EXPORTAR REPORTE DETALLADO DE ALUMNO A EXCEL ======
                         import openpyxl
-                        from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
+                        from openpyxl.styles import Font, PatternFill, Border, Side, Alignment, Protection
                         from openpyxl.utils import get_column_letter
+                        from datetime import datetime, date
+                        import calendar
 
                         wb = openpyxl.Workbook()
                         ws = wb.active
@@ -3501,21 +3495,23 @@ class VentanaPrincipal:
                             top=Side(style="thin"), bottom=Side(style="thin")
                         )
                         alignment = Alignment(horizontal="left", vertical="center")
+                        alignment_center = Alignment(horizontal="center", vertical="center")
+                        wrap_left = Alignment(horizontal="left", vertical="top", wrap_text=True)
 
-                        # 1. Título
-                        ws.merge_cells("A1:B1")
-                        ws["A1"] = "REPORTE DE ASISTENCIA"
+                        # 1. Título (incluye mes/año como en PDF)
+                        ws.merge_cells("A1:E1")
+                        ws["A1"] = f"REPORTE DE ASISTENCIA — {mes_nombre} {anio}"
                         ws["A1"].font = Font(bold=True, size=14, color="1F497D")
                         ws["A1"].alignment = Alignment(horizontal="center")
 
                         # 2. Información del estudiante
-                        ws.merge_cells("A2:B2")
+                        ws.merge_cells("A2:E2")
                         ws["A2"] = "INFORMACIÓN DEL ESTUDIANTE"
                         ws["A2"].font = header_font
                         ws["A2"].alignment = Alignment(horizontal="center")
                         ws["A2"].fill = header_fill
-                        ws["A2"].border = border
-                        ws["B2"].border = border
+                        for c in range(1, 6):
+                            ws.cell(row=2, column=c).border = border
 
                         datos_estudiante = [
                             ["Nombre:", meta.get("nombre", "N/A")],
@@ -3527,28 +3523,29 @@ class VentanaPrincipal:
                             ["Carrera:", meta.get("carrera", "N/A")]
                         ]
 
+                        # info estudiante en A..B (sin tocar resto)
+                        row_start_info = 3
                         for row in datos_estudiante:
-                            ws.append(row)
+                            ws.append([row[0], row[1], "", "", ""])
 
-                        # Formato de info estudiante
-                        for row_idx in range(3, 10):
-                            ws[f"A{row_idx}"].font = subheader_font
-                            ws[f"A{row_idx}"].fill = subheader_fill
-                            ws[f"A{row_idx}"].border = border
-                            ws[f"B{row_idx}"].border = border
-                            ws[f"A{row_idx}"].alignment = alignment
-                            ws[f"B{row_idx}"].alignment = alignment
+                        for r in range(row_start_info, row_start_info + len(datos_estudiante)):
+                            ws[f"A{r}"].font = subheader_font
+                            ws[f"A{r}"].fill = subheader_fill
+                            ws[f"A{r}"].border = border
+                            ws[f"B{r}"].border = border
+                            ws[f"A{r}"].alignment = alignment
+                            ws[f"B{r}"].alignment = alignment
 
-                        # 3. Estadísticas (todas como texto HH:MM:SS)
-                        ws.append([])  # espacio
-                        stats_title_row = 11
-                        ws.merge_cells(f"A{stats_title_row}:B{stats_title_row}")
+                        # 3. Estadísticas (texto HH:MM:SS)
+                        ws.append(["", "", "", "", ""])
+                        stats_title_row = ws.max_row + 1
+                        ws.merge_cells(f"A{stats_title_row}:E{stats_title_row}")
                         ws[f"A{stats_title_row}"] = "ESTADÍSTICAS DE ASISTENCIA"
                         ws[f"A{stats_title_row}"].font = header_font
                         ws[f"A{stats_title_row}"].alignment = Alignment(horizontal="center")
                         ws[f"A{stats_title_row}"].fill = header_fill
-                        ws[f"A{stats_title_row}"].border = border
-                        ws[f"B{stats_title_row}"].border = border
+                        for c in range(1, 6):
+                            ws.cell(row=stats_title_row, column=c).border = border
 
                         estadisticas_data = [
                             ["Promedio semanal (hrs):",   estadisticas.get("promedio_semanal", "00:00:00")],
@@ -3557,22 +3554,19 @@ class VentanaPrincipal:
                             ["Hora más frecuente de salida:",  estadisticas.get("hora_salida_frecuente", "--:--:--")],
                         ]
 
-                        start_row = stats_title_row + 1
-                        for i, row_data in enumerate(estadisticas_data):
-                            row_idx = start_row + i
-                            ws.append(row_data)
-                            ws[f"A{row_idx}"].font = subheader_font
-                            ws[f"A{row_idx}"].fill = subheader_fill
-                            ws[f"A{row_idx}"].border = border
-                            ws[f"B{row_idx}"].border = border
-                            ws[f"A{row_idx}"].alignment = alignment
-                            ws[f"B{row_idx}"].alignment = alignment
-                            # ya NO aplicamos number_format, vienen como texto HH:MM:SS
+                        for label, val in estadisticas_data:
+                            ws.append([label, val, "", "", ""])
+                            r = ws.max_row
+                            ws[f"A{r}"].font = subheader_font
+                            ws[f"A{r}"].fill = subheader_fill
+                            ws[f"A{r}"].border = border
+                            ws[f"B{r}"].border = border
+                            ws[f"A{r}"].alignment = alignment
+                            ws[f"B{r}"].alignment = alignment
 
-                        # 4. Historial detallado (CON INCIDENCIAS)
-                        ws.append([])
+                        # 4. HISTORIAL DETALLADO (incluye TODOS los días del mes)
+                        ws.append(["", "", "", "", ""])
                         titulo_historial_row = ws.max_row + 1
-                        # historial usa 5 columnas (A..E)
                         ws.merge_cells(
                             start_row=titulo_historial_row,
                             start_column=1,
@@ -3590,65 +3584,101 @@ class VentanaPrincipal:
                         encabezados = ["Fecha", "Hora de Entrada", "Hora de Salida", "Horas Presentes", "Incidencia"]
                         header_row = ws.max_row + 1
                         ws.append(encabezados)
-
                         for col, header in enumerate(encabezados, start=1):
                             cell = ws.cell(row=header_row, column=col)
                             cell.font = subheader_font
                             cell.fill = subheader_fill
                             cell.border = border
-                            cell.alignment = Alignment(horizontal="center")
+                            cell.alignment = alignment_center
 
-                        if historial and isinstance(historial, list) and (
-                            len(historial) == 0 or isinstance(historial[0], dict)
-                        ):
+                        # ---- helpers de fecha/incidencia ----
+                        def _parse_fecha_hist(v):
+                            if not v:
+                                return None
+                            s = str(v).strip()
+                            for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
+                                try:
+                                    return datetime.strptime(s, fmt).date()
+                                except:
+                                    pass
+                            return None
+
+                        def _fmt_mod_excel(v):
+                            if not v:
+                                return ""
+                            s = str(v).strip()
+                            if not s:
+                                return ""
+                            for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M"):
+                                try:
+                                    dt = datetime.strptime(s, fmt)
+                                    return dt.strftime("%d-%m-%Y %H:%M:%S")
+                                except:
+                                    continue
+                            try:
+                                return v.strftime("%d-%m-%Y %H:%M:%S")
+                            except:
+                                return s
+
+                        # Indexar historial por fecha
+                        idx = {}
+                        if historial and isinstance(historial, list) and (len(historial) == 0 or isinstance(historial[0], dict)):
                             for reg in historial:
-                                row = [
-                                    reg.get("fecha", "--/--/----"),
-                                    reg.get("hora_entrada", "--:--:--"),
-                                    reg.get("hora_salida", "--:--:--"),
-                                    reg.get("horas_presentes", "00:00:00"),  # ya viene HH:MM:SS
-                                    reg.get("motivo_incidencia", ""),        # motivo seleccionado en incidencias
-                                ]
-                                ws.append(row)
-                        else:
-                            ws.append(["--/--/----", "--:--:--", "--:--:--", "00:00:00", ""])
+                                f = _parse_fecha_hist(reg.get("fecha"))
+                                if f:
+                                    idx[f] = reg
 
-                        # Bordes + formato + color en salidas manuales
-                        from openpyxl.styles import PatternFill
+                        last_day = calendar.monthrange(anio, mes)[1]
 
-                        for row_idx in range(header_row + 1, ws.max_row + 1):
+                        # Rellenar 1..último día
+                        for d in range(1, last_day + 1):
+                            f = date(anio, mes, d)
+                            reg = idx.get(f)
+
+                            fecha_txt = f.strftime("%d-%m-%Y")
+
+                            if not reg:
+                                ws.append([fecha_txt, "", "", "", ""])
+                                continue
+
+                            ent = str(reg.get("hora_entrada") or "")
+                            salida_val = reg.get("hora_salida")
+                            sal = "" if salida_val in (None, "", " ", "--:--", "--:--:--") else str(salida_val)
+                            horas = str(reg.get("horas_presentes") or "")
+                            motivo = str(reg.get("motivo_incidencia") or "").strip()
+                            mod_fmt = _fmt_mod_excel(reg.get("fecha_modificacion"))
+
+                            incidencia_txt = ""
+                            if motivo:
+                                if mod_fmt:
+                                    incidencia_txt = f"{motivo}\nMod: {mod_fmt}"
+                                else:
+                                    incidencia_txt = motivo
+
+                            ws.append([fecha_txt, ent, sal, horas, incidencia_txt])
+
+                        # Bordes + formato + color + wrap incidencias + NO editar
+                        fill_incid = PatternFill(start_color="FFF59D", end_color="FFF59D", fill_type="solid")
+
+                        first_data_row = header_row + 1
+                        last_data_row = ws.max_row
+
+                        for row_idx in range(first_data_row, last_data_row + 1):
                             for col_idx in range(1, 6):
                                 cell = ws.cell(row=row_idx, column=col_idx)
                                 cell.border = border
-                                cell.alignment = alignment
+                                # default align
+                                cell.alignment = alignment_center if col_idx in (1, 2, 3, 4) else wrap_left
 
-                            # Columna 5 = Incidencia → si tiene texto, pintamos SOLO la celda de Hora de salida (col 3)
-                            cell_inc = ws.cell(row=row_idx, column=5)
-                            if isinstance(cell_inc.value, str) and cell_inc.value.strip():
-                                cell_salida = ws.cell(row=row_idx, column=3)  # Hora de salida
-                                cell_salida.fill = PatternFill(
-                                    start_color="FFF59D",  # amarillo suave
-                                    end_color="FFF59D",
-                                    fill_type="solid"
-                                )
+                                # bloquear celdas (protección)
+                                cell.protection = Protection(locked=True)
 
-                        # 5. Leyenda de motivos de incidencias
-                        leyenda_row = ws.max_row + 2
-                        ws.merge_cells(
-                            start_row=leyenda_row,
-                            start_column=1,
-                            end_row=leyenda_row,
-                            end_column=5
-                        )
-                        cell_leyenda = ws.cell(row=leyenda_row, column=1)
-                        cell_leyenda.value = (
-                            "Motivo de incidencias (solo cuando aplique): "
-                            "Vista de campo (obra), Coordinación cerrada, Clases en línea."
-                        )
-                        cell_leyenda.font = Font(italic=True, size=10)
-                        cell_leyenda.alignment = Alignment(horizontal="left")
+                            # pintar SOLO hora de salida si hay incidencia
+                            inc_cell = ws.cell(row=row_idx, column=5)
+                            if isinstance(inc_cell.value, str) and inc_cell.value.strip():
+                                ws.cell(row=row_idx, column=3).fill = fill_incid
 
-                        # Ajustar anchos
+                        # Ajustar anchos (manteniendo tu lógica)
                         for col in ws.columns:
                             max_length = 0
                             column = get_column_letter(col[0].column)
@@ -3660,7 +3690,13 @@ class VentanaPrincipal:
                                     pass
                             ws.column_dimensions[column].width = max_length + 2
 
+                        # Congelar (como lo tenías)
                         ws.freeze_panes = "A2"
+
+                        # ✅ PROTECCIÓN PARA QUE NO SE PUEDA EDITAR (password 12345)
+                        ws.protection.sheet = True
+                        ws.protection.enable()
+                        ws.protection.set_password("12345")
 
                         wb.save(file_path)
                         messagebox.showinfo("Exportación individual", f"Excel generado:\n{file_path}")
@@ -3717,7 +3753,7 @@ class VentanaPrincipal:
         if not file_path:
             return
 
-        headers = ["MATRÍCULA","NOMBRE","GENERACIÓN","ASESOR","ÁREA","CARRERA","TOT HRS","PROM SEM","PROM MES"]
+        headers = ["MATRÍCULA", "NOMBRE", "GENERACIÓN", "ASESOR", "ÁREA", "CARRERA", "TOT HRS", "PROM SEM", "PROM MES"]
 
         if file_path.endswith(".xlsx"):
             from openpyxl import Workbook
@@ -3750,7 +3786,7 @@ class VentanaPrincipal:
                 r += 1
 
             for col in range(1, 10):
-                ws.column_dimensions[chr(64+col)].width = 18
+                ws.column_dimensions[chr(64 + col)].width = 18
 
             wb.save(file_path)
             messagebox.showinfo("Éxito", f"Reporte exportado:\n{file_path}")
@@ -3781,10 +3817,15 @@ class VentanaPrincipal:
 
 
 
+
     def _generar_pdf_alumno(self, meta: dict, carpeta_salida: str = None, dest_path: str = None) -> str:
         """
         Genera un PDF individual para el alumno usando el diseño de fondo.
         Incluye columna de Incidencias y leyenda de motivos.
+        - Ordena el historial ASC (01,02,03...)
+        - Hora salida en blanco si no existe
+        - Si hay incidencia: pinta SOLO la celda de Hora Salida y muestra fecha_modificacion en la columna Incidencia
+        - Rellena días faltantes del mes (28/30/31) y en días sin registro deja todo en blanco
         """
 
         def slugify(s):
@@ -3792,6 +3833,42 @@ class VentanaPrincipal:
             s = "".join(c for c in unicodedata.normalize("NFKD", s) if not unicodedata.combining(c))
             s = re.sub(r"[^\w\-. ]+", "", s, flags=re.UNICODE)
             return s.strip().replace(" ", "_")
+
+        def _parse_fecha(fecha_str):
+            if not fecha_str:
+                return datetime.min
+            fs = str(fecha_str).strip()
+            try:
+                return datetime.strptime(fs, "%Y-%m-%d")
+            except:
+                pass
+            try:
+                return datetime.strptime(fs, "%d/%m/%Y")
+            except:
+                return datetime.min
+
+        def _fmt_fecha_ddmmyyyy(dt: datetime) -> str:
+            try:
+                return dt.strftime("%d/%m/%Y")
+            except:
+                return ""
+
+        def _fmt_modificacion(v):
+            if not v:
+                return ""
+            s = str(v).strip()
+            if not s:
+                return ""
+            for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M"):
+                try:
+                    dt = datetime.strptime(s, fmt)
+                    return dt.strftime("%d/%m/%Y %H:%M:%S")
+                except:
+                    continue
+            try:
+                return v.strftime("%d/%m/%Y %H:%M:%S")
+            except:
+                return s
 
         # construir nombre si no se pasó dest_path
         if dest_path is None:
@@ -3820,15 +3897,59 @@ class VentanaPrincipal:
 
         # ------- estadísticas -------
         estad = meta.get("estad", {}) or {}
-        tot_hrs = str(estad.get("total_horas_mes", estad.get("total_horas_periodo", "0.00")))
-        prom_sem = str(estad.get("promedio_semanal", "0.00"))
-        prom_mes = str(estad.get("promedio_mensual", "0.00"))
-        hora_ent = estad.get("hora_entrada_frecuente", "--:--")
-        hora_sal = estad.get("hora_salida_frecuente", "--:--")
+        tot_hrs = str(estad.get("total_horas_mes", estad.get("total_horas_periodo", "00:00:00")))
+        prom_sem = str(estad.get("promedio_semanal", "00:00:00"))
+        prom_mes = str(estad.get("promedio_mensual", "00:00:00"))
+        hora_ent = estad.get("hora_entrada_frecuente", "--:--:--")
+        hora_sal = estad.get("hora_salida_frecuente", "--:--:--")
         historial = estad.get("historial", []) or []
 
-        # ✅ ORDEN DESCENDENTE (más reciente primero)
-        historial_ordenado = sorted(historial, key=lambda r: str(r.get("fecha", "")))
+        # ✅ ORDEN ASCENDENTE: 01,02,03...
+        historial_ordenado = sorted(historial, key=lambda r: _parse_fecha(r.get("fecha", "")))
+
+        # =============================
+        # ✅ RELLENO DE DÍAS DEL MES
+        # =============================
+        if mes and anio:
+            import calendar
+            try:
+                mes_int = int(mes)
+                anio_int = int(anio)
+                _, last_day = calendar.monthrange(anio_int, mes_int)
+
+                # mapa por fecha normalizada a dd/mm/yyyy
+                mapa = {}
+                for r in historial_ordenado:
+                    dt = _parse_fecha(r.get("fecha", ""))
+                    k = _fmt_fecha_ddmmyyyy(dt)
+                    if k:
+                        mapa[k] = r
+
+                historial_completo = []
+                for dia in range(1, last_day + 1):
+                    dt = datetime(anio_int, mes_int, dia)
+                    k = _fmt_fecha_ddmmyyyy(dt)
+
+                    if k in mapa:
+                        # aseguramos que la fecha se vea dd/mm/yyyy
+                        reg = dict(mapa[k])
+                        reg["fecha"] = k
+                        historial_completo.append(reg)
+                    else:
+                        # día sin registro -> todo en blanco
+                        historial_completo.append({
+                            "fecha": k,
+                            "hora_entrada": "",
+                            "hora_salida": "",
+                            "horas_presentes": "",
+                            "motivo_incidencia": "",
+                            "fecha_modificacion": "",
+                        })
+
+                historial_ordenado = historial_completo
+            except:
+                pass
+
         # ------- datos del alumno -------
         nombre_alumno = (meta.get("nombre", "") or "").strip()
         matricula = str(meta.get("matricula", "") or "")
@@ -3841,15 +3962,12 @@ class VentanaPrincipal:
         pdf = FPDF()
         pdf.add_page()
 
-        # Tamaño de página
         page_w = pdf.w
         page_h = pdf.h
 
-        # Límites dinámicos
         Y_MAX_CONTENIDO = page_h - 40
         Y_MAX_TABLA = page_h - 55
 
-        # Fondo
         posibles_rutas = [
             resource_path(os.path.join("public", "static", "images", "diseno.png")),
             resource_path(os.path.join("public", "static", "images", "diseño.png")),
@@ -3861,22 +3979,17 @@ class VentanaPrincipal:
                     break
         except Exception as e:
             print(f"Error al cargar membrete PDF: {e}")
-            pass
 
-        # Título
         pdf.set_font("Arial", "B", 20)
         pdf.set_xy(0, 40)
         pdf.cell(0, 10, "REPORTE DE ASISTENCIAS", ln=True, align="C")
 
-        # Mes / periodo
         pdf.set_font("Arial", "", 14)
         if encabezado_rango:
             pdf.cell(0, 8, encabezado_rango, ln=True, align="C")
         pdf.ln(10)
 
-        # ============================================================
-        #     🟦 DATOS DEL ALUMNO (con MULTI_CELL para Carrera)
-        # ============================================================
+        # Datos del alumno
         pdf.set_font("Arial", "", 12)
         line_h = 7
 
@@ -3889,32 +4002,25 @@ class VentanaPrincipal:
 
         y = pdf.get_y()
 
-        # 1️⃣ Alumno / Matrícula
         pdf.set_xy(left_x, y)
         pdf.cell(left_w, line_h, f"Estudiante: {nombre_alumno}", ln=0)
-
         pdf.set_xy(right_x, y)
         pdf.multi_cell(right_w, line_h, f"Matrícula: {matricula}")
         y = max(y + line_h, pdf.get_y())
 
-        # 2️⃣ Generación / Asesor
         pdf.set_xy(left_x, y)
         pdf.cell(left_w, line_h, f"Generación: {generacion}", ln=0)
-
         pdf.set_xy(right_x, y)
         pdf.multi_cell(right_w, line_h, f"Asesor: {asesor}")
         y = max(y + line_h, pdf.get_y())
 
-        # 3️⃣ Área / Carrera
         pdf.set_xy(left_x, y)
         pdf.cell(left_w, line_h, f"Área: {area}", ln=0)
-
         pdf.set_xy(right_x, y)
         pdf.multi_cell(right_w, line_h, f"Carrera: {carrera}")
         y = max(y + line_h, pdf.get_y())
 
         pdf.set_y(y + 5)
-        # ============================================================
 
         # Resumen
         pdf.set_font("Arial", "B", 12)
@@ -3928,16 +4034,13 @@ class VentanaPrincipal:
 
         pdf.ln(10)
 
-        # Historial
         pdf.set_font("Arial", "B", 12)
         pdf.cell(0, line_h, "Historial de Asistencias", ln=True)
         pdf.ln(2)
 
-        # ------------------------------------------------------------
-        # Tabla con columna extra "Incidencia"
-        # ------------------------------------------------------------
+        # Tabla
         pdf.set_font("Arial", "B", 10)
-        col_w = [35, 35, 35, 35, 50]
+        col_w = [32, 32, 32, 32, 62]
         headers = ["Fecha", "Hora Entrada", "Hora Salida", "Horas Presentes", "Incidencia"]
         ALTURA_FILA = 7
 
@@ -3947,7 +4050,30 @@ class VentanaPrincipal:
 
         pdf.set_font("Arial", "", 9)
         for reg in historial_ordenado:
-            if pdf.get_y() + ALTURA_FILA > Y_MAX_TABLA:
+            fecha_txt = str(reg.get("fecha", "") or "")
+            ent_txt = str(reg.get("hora_entrada", "") or "")
+
+            salida_val = reg.get("hora_salida")
+            sal_txt = "" if salida_val in (None, "", " ", "--:--", "--:--:--") else str(salida_val)
+
+            horas_txt = str(reg.get("horas_presentes", "") or "")
+
+            motivo = str(reg.get("motivo_incidencia", "") or "").strip()
+            mod_raw = reg.get("fecha_modificacion")
+            mod_fmt = _fmt_modificacion(mod_raw)
+
+            hay_incid = bool(motivo)
+
+            incidencia_txt = ""
+            if hay_incid:
+                if mod_fmt:
+                    incidencia_txt = f"{motivo}\nMod: {mod_fmt}"
+                else:
+                    incidencia_txt = motivo
+
+            fila_h = ALTURA_FILA * (2 if ("\n" in incidencia_txt) else 1)
+
+            if pdf.get_y() + fila_h > Y_MAX_TABLA:
                 pdf.add_page()
                 page_w = pdf.w
                 page_h = pdf.h
@@ -3969,52 +4095,35 @@ class VentanaPrincipal:
                 pdf.ln(8)
                 pdf.set_font("Arial", "", 9)
 
-            fecha_txt = str(reg.get("fecha", ""))
-            ent_txt = str(reg.get("hora_entrada", ""))
+            y0 = pdf.get_y()
+            x0 = pdf.get_x()
 
-            # ✅ Hora salida en blanco si no hay (sin "--:--:--")
-            salida_val = reg.get("hora_salida")
-            sal_txt = "" if salida_val in (None, "", " ", "--:--", "--:--:--") else str(salida_val)
+            pdf.cell(col_w[0], fila_h, fecha_txt, border=1, align="C")
+            pdf.cell(col_w[1], fila_h, ent_txt, border=1, align="C")
 
-            horas_txt = str(reg.get("horas_presentes", ""))
-            motivo = str(reg.get("motivo_incidencia", "") or "")
-            hay_incid = bool(motivo.strip())
-
-            # Fecha
-            pdf.cell(col_w[0], ALTURA_FILA, fecha_txt, border=1, align="C")
-            # Hora entrada
-            pdf.cell(col_w[1], ALTURA_FILA, ent_txt, border=1, align="C")
-
-            # 🟡 Hora salida (solo se pinta cuando fue manual)
-            if hay_incid:
+            if hay_incid and sal_txt:
                 pdf.set_fill_color(255, 230, 153)
-                pdf.cell(col_w[2], ALTURA_FILA, sal_txt, border=1, align="C", fill=True)
+                pdf.cell(col_w[2], fila_h, sal_txt, border=1, align="C", fill=True)
                 pdf.set_fill_color(255, 255, 255)
             else:
-                pdf.cell(col_w[2], ALTURA_FILA, sal_txt, border=1, align="C")
+                pdf.cell(col_w[2], fila_h, sal_txt, border=1, align="C")
 
-            # Horas presentes
-            pdf.cell(col_w[3], ALTURA_FILA, horas_txt, border=1, align="C")
-            # Incidencia
-            pdf.cell(col_w[4], ALTURA_FILA, motivo, border=1, align="C")
+            pdf.cell(col_w[3], fila_h, horas_txt, border=1, align="C")
 
-            pdf.ln(ALTURA_FILA)
+            pdf.multi_cell(col_w[4], ALTURA_FILA, incidencia_txt, border=1, align="L")
+            pdf.set_xy(x0, y0 + fila_h)
 
-        # ------------------------------------------------------------
-        # Leyenda de motivos de incidencias
-        # ------------------------------------------------------------
         pdf.ln(5)
         pdf.set_font("Arial", "I", 9)
         pdf.multi_cell(
             0,
             5,
             "Motivo de incidencias (solo cuando aplique): "
-            "Vista de campo (obra), Coordinación cerrada, Clases en línea."
+            "Visita de campo (obra), Coordinación cerrada, Clases en línea."
         )
 
         # Firma
         FIRMA_ALTURA = 22
-
         if pdf.get_y() + FIRMA_ALTURA > Y_MAX_CONTENIDO:
             pdf.add_page()
             page_w = pdf.w
@@ -4041,23 +4150,18 @@ class VentanaPrincipal:
         pdf.ln(2)
         pdf.cell(0, 6, texto_asesor, ln=True, align="C")
 
-        # Protección
         if hasattr(pdf, "set_encryption"):
             try:
                 pdf.set_encryption(
                     owner_password="12345",
                     user_password=None,
-                    permissions=(
-                        AccessPermission.PRINT_LOW_RES |
-                        AccessPermission.PRINT_HIGH_RES
-                    )
+                    permissions=(AccessPermission.PRINT_LOW_RES | AccessPermission.PRINT_HIGH_RES)
                 )
             except:
                 pass
 
         pdf.output(dest_path)
         return dest_path
-
 
     def _enviar_reporte_generacion_por_correo(self, top):
         """
@@ -4346,9 +4450,42 @@ class VentanaPrincipal:
                     messagebox.showerror("Error", f"No se pudo generar el PDF:\n{e}")
 
             def _exportar_excel_core():
-                
-              
+                #import openpyxl
+                import calendar
+                #from datetime import datetime, date
+                #from tkinter import filedialog, messagebox
+                #from openpyxl.styles import Font, PatternFill, Border, Side, Alignment, Protection
+                #from openpyxl.utils import get_column_letter
+                #from openpyxl.workbook.protection import WorkbookProtection
 
+                def _fmt_modificacion(v):
+                    # dd-mm-aaaa HH:MM:SS
+                    if not v:
+                        return ""
+                    s = str(v).strip()
+                    if not s:
+                        return ""
+                    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M"):
+                        try:
+                            return datetime.strptime(s, fmt).strftime("%d-%m-%Y %H:%M:%S")
+                        except:
+                            continue
+                    try:
+                        return v.strftime("%d-%m-%Y %H:%M:%S")
+                    except:
+                        return s
+
+                def _hora_o_blanco(v):
+                    if v in (None, "", " ", "--:--", "--:--:--"):
+                        return ""
+                    return str(v)
+
+                # ✅ historial SIEMPRE desde estadisticas (evita el error de scope)
+                historial_local = (estadisticas.get("historial") or [])
+                if not isinstance(historial_local, list):
+                    historial_local = []
+
+                # -------- nombre sugerido + ruta --------
                 nombre_sugerido = f"reporte_{estudiante.get('matricula','nombre')}_{seleccion}.xlsx".replace(" ", "_")
                 ruta_xls = filedialog.asksaveasfilename(
                     defaultextension=".xlsx",
@@ -4363,7 +4500,7 @@ class VentanaPrincipal:
                 ws = wb.active
                 ws.title = "Reporte de Asistencia"
 
-                # Estilos
+                # -------- estilos --------
                 header_font = Font(bold=True, color="FFFFFF", size=12)
                 header_fill = PatternFill(start_color="4F81BD", end_color="4F81BD", fill_type="solid")
                 subheader_font = Font(bold=True, color="000000", size=11)
@@ -4374,22 +4511,37 @@ class VentanaPrincipal:
                     top=Side(style='thin'),
                     bottom=Side(style='thin')
                 )
-                alignment = Alignment(horizontal="left", vertical="center")
+                alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
 
-                # 1. ENCABEZADO
+                # -------- mes/año (para encabezado y para rellenar días) --------
+                try:
+                    mes_nombre = self.combo_mes.get()
+                except Exception:
+                    mes_nombre = str(mes)
+
+                # =========================
+                # 1) ENCABEZADO + MES/AÑO
+                # =========================
                 ws.merge_cells('A1:B1')
                 ws['A1'] = "REPORTE DE ASISTENCIA"
                 ws['A1'].font = Font(bold=True, size=14, color="1F497D")
                 ws['A1'].alignment = Alignment(horizontal="center")
 
-                # 2. INFORMACIÓN DEL ESTUDIANTE
                 ws.merge_cells('A2:B2')
-                ws['A2'] = "INFORMACIÓN DEL ESTUDIANTE"
-                ws['A2'].font = header_font
+                ws['A2'] = f"Mes {mes_nombre} {anio}"
+                ws['A2'].font = Font(bold=True, size=12, color="1F497D")
                 ws['A2'].alignment = Alignment(horizontal="center")
-                ws['A2'].fill = header_fill
-                ws['A2'].border = border
-                ws['B2'].border = border
+
+                # =========================
+                # 2) INFORMACIÓN ESTUDIANTE
+                # =========================
+                ws.merge_cells('A3:B3')
+                ws['A3'] = "INFORMACIÓN DEL ESTUDIANTE"
+                ws['A3'].font = header_font
+                ws['A3'].alignment = Alignment(horizontal="center")
+                ws['A3'].fill = header_fill
+                ws['A3'].border = border
+                ws['B3'].border = border
 
                 datos_estudiante = [
                     ["Nombre:", seleccion],
@@ -4404,7 +4556,8 @@ class VentanaPrincipal:
                 for row in datos_estudiante:
                     ws.append(row)
 
-                for row in range(3, 10):
+                # filas 4..10 (7 datos)
+                for row in range(4, 11):
                     ws[f'A{row}'].font = subheader_font
                     ws[f'A{row}'].fill = subheader_fill
                     ws[f'A{row}'].border = border
@@ -4412,15 +4565,17 @@ class VentanaPrincipal:
                     ws[f'A{row}'].alignment = alignment
                     ws[f'B{row}'].alignment = alignment
 
-                # 3. ESTADÍSTICAS (HH:MM:SS como texto)
+                # =========================
+                # 3) ESTADÍSTICAS
+                # =========================
                 ws.append([])
-                ws.merge_cells('A11:B11')
-                ws['A11'] = "ESTADÍSTICAS DE ASISTENCIA"
-                ws['A11'].font = header_font
-                ws['A11'].alignment = Alignment(horizontal="center")
-                ws['A11'].fill = header_fill
-                ws['A11'].border = border
-                ws['B11'].border = border
+                ws.merge_cells('A12:B12')
+                ws['A12'] = "ESTADÍSTICAS DE ASISTENCIA"
+                ws['A12'].font = header_font
+                ws['A12'].alignment = Alignment(horizontal="center")
+                ws['A12'].fill = header_fill
+                ws['A12'].border = border
+                ws['B12'].border = border
 
                 estadisticas_data = [
                     ["Promedio semanal (hrs):",   estadisticas.get('promedio_semanal', "00:00:00")],
@@ -4439,9 +4594,10 @@ class VentanaPrincipal:
                     ws[f'B{row_idx}'].border = border
                     ws[f'A{row_idx}'].alignment = alignment
                     ws[f'B{row_idx}'].alignment = alignment
-                    # ya no se usa number_format, son strings HH:MM:SS
 
-                # 4. HISTORIAL (CON INCIDENCIAS)
+                # =========================
+                # 4) HISTORIAL (MES COMPLETO)
+                # =========================
                 ws.append([])
                 titulo_historial_row = ws.max_row + 1
                 ws.merge_cells(
@@ -4455,7 +4611,6 @@ class VentanaPrincipal:
                 cell_titulo.font = header_font
                 cell_titulo.fill = header_fill
                 cell_titulo.alignment = Alignment(horizontal="center")
-
                 for col in range(1, 6):
                     ws.cell(row=titulo_historial_row, column=col).border = border
 
@@ -4467,41 +4622,67 @@ class VentanaPrincipal:
                     cell.font = subheader_font
                     cell.fill = subheader_fill
                     cell.border = border
-                    cell.alignment = Alignment(horizontal="center")
+                    cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
-                if historial and isinstance(historial, list) and (
-                    len(historial) == 0 or isinstance(historial[0], dict)
-                ):
-                    for reg in historial:
-                        row = [
-                            reg.get('fecha', '--/--/----'),
-                            reg.get('hora_entrada', '--:--:--'),
-                            reg.get('hora_salida', '--:--:--'),
-                            reg.get('horas_presentes', '00:00:00'),   # HH:MM:SS
-                            reg.get('motivo_incidencia', "")          # motivo de incidencia
-                        ]
-                        ws.append(row)
-                else:
-                    ws.append(["--/--/----", "--:--:--", "--:--:--", "00:00:00", ""])
+                # ---- construir mapa fecha->registro ----
+                mapa = {}
+                for reg in historial_local:
+                    if not isinstance(reg, dict):
+                        continue
+                    f = reg.get("fecha")
+                    if not f:
+                        continue
+                    s = str(f).strip()
+                    dt_f = None
+                    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
+                        try:
+                            dt_f = datetime.strptime(s, fmt).date()
+                            break
+                        except:
+                            continue
+                    if dt_f:
+                        mapa[dt_f] = reg
 
-                # Formato filas + resaltar solo la celda de hora de salida cuando hay incidencia
+                # ---- rellenar todos los días del mes ----
+                last_day = calendar.monthrange(int(anio), int(mes))[1]
+                for d in range(1, last_day + 1):
+                    fecha_d = date(int(anio), int(mes), d)
+                    reg = mapa.get(fecha_d)
+
+                    if reg:
+                        fecha_txt = fecha_d.strftime("%d-%m-%Y")
+                        ent = _hora_o_blanco(reg.get("hora_entrada"))
+                        sal = _hora_o_blanco(reg.get("hora_salida"))
+                        hrs = str(reg.get("horas_presentes") or "")
+                        motivo = str(reg.get("motivo_incidencia") or "").strip()
+                        mod_fmt = _fmt_modificacion(reg.get("fecha_modificacion"))
+
+                        incidencia_txt = ""
+                        if motivo:
+                            incidencia_txt = f"{motivo}\nMod: {mod_fmt}" if mod_fmt else motivo
+
+                        ws.append([fecha_txt, ent, sal, hrs, incidencia_txt])
+                    else:
+                        ws.append([fecha_d.strftime("%d-%m-%Y"), "", "", "", ""])
+
+                # ---- bordes + resaltar hora salida cuando hay incidencia ----
+                yellow = PatternFill(start_color="FFF59D", end_color="FFF59D", fill_type="solid")
+
                 for row_idx in range(header_row + 1, ws.max_row + 1):
                     for col_idx in range(1, 6):
                         cell = ws.cell(row=row_idx, column=col_idx)
                         cell.border = border
                         cell.alignment = alignment
 
-                    # Columna 5 = Incidencia → si tiene texto, pintamos SOLO la celda de Hora de salida (col 3)
                     cell_inc = ws.cell(row=row_idx, column=5)
                     if isinstance(cell_inc.value, str) and cell_inc.value.strip():
-                        cell_salida = ws.cell(row=row_idx, column=3)  # Hora de salida
-                        cell_salida.fill = PatternFill(
-                            start_color="FFF59D",  # amarillo suave
-                            end_color="FFF59D",
-                            fill_type="solid"
-                        )
+                        cell_salida = ws.cell(row=row_idx, column=3)
+                        if str(cell_salida.value).strip():
+                            cell_salida.fill = yellow
 
-                # 5. LEYENDA MOTIVOS
+                # =========================
+                # 5) LEYENDA MOTIVOS
+                # =========================
                 leyenda_row = ws.max_row + 2
                 ws.merge_cells(
                     start_row=leyenda_row,
@@ -4515,7 +4696,7 @@ class VentanaPrincipal:
                     "Vista de campo (obra), Coordinación cerrada, Clases en línea."
                 )
                 cell_leyenda.font = Font(italic=True, size=10)
-                cell_leyenda.alignment = Alignment(horizontal="left")
+                cell_leyenda.alignment = Alignment(horizontal="left", wrap_text=True)
 
                 # Ajuste de columnas
                 for col in ws.columns:
@@ -4529,9 +4710,11 @@ class VentanaPrincipal:
                             pass
                     ws.column_dimensions[column].width = max_length + 2
 
-                ws.freeze_panes = 'A2'
+                ws.freeze_panes = 'A4'
 
+                # =========================
                 # PROTECCIÓN
+                # =========================
                 for row in ws.iter_rows():
                     for cell in row:
                         cell.protection = Protection(locked=True)
@@ -4547,15 +4730,9 @@ class VentanaPrincipal:
 
                 try:
                     wb.save(ruta_xls)
-                    messagebox.showinfo(
-                        "Exportación exitosa",
-                        f"Reporte generado correctamente:\n{ruta_xls}"
-                    )
+                    messagebox.showinfo("Exportación exitosa", f"Reporte generado correctamente:\n{ruta_xls}")
                 except Exception as e:
-                    messagebox.showerror(
-                        "Error al guardar",
-                        f"No se pudo guardar el archivo:\n{e}"
-                    )
+                    messagebox.showerror("Error al guardar", f"No se pudo guardar el archivo:\n{e}")
 
             # ==========================
             # 4) SI VIENE FORMATO DESDE BOTÓN FIJO → ejecutar directo

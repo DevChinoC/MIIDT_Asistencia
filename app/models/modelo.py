@@ -1085,7 +1085,10 @@ class Modelo:
         - y registrar fecha_modificacion.
         """
         try:
+            # Obtener la fecha actual en el formato adecuado
             fecha_mod = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
+
+            # Ejecutar la consulta UPDATE para registrar la salida y la incidencia
             self.cursor.execute(
                 """
                 UPDATE registro_asistencias
@@ -1096,9 +1099,12 @@ class Modelo:
                 """,
                 (hora_salida, motivo_incidencia, fecha_mod, asistencia_id)
             )
+
+            # Confirmar los cambios
             self.db.commit()
             return True
+
         except Exception as e:
             print(f"Error al registrar salida manual con incidencia: {e}")
             self.db.rollback()
-            return False
+            return False  # Solo retornar False en caso de error
