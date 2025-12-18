@@ -2131,7 +2131,7 @@ class VentanaPrincipal:
             return
 
         # 2. Obtener asistencias sin salida
-        asistencias = self.controlador.obtener_asistencias_sin_salida_por_alumno(alumno_id)
+        asistencias = self.controlador.obtener_asistencias_sin_salida_por_alumno(alumno_id, excluir_hoy=True)
         if not asistencias:
             messagebox.showinfo("Incidencias", "Esta persona no tiene asistencias con entrada sin salida registrada.")
             return
